@@ -1,4 +1,5 @@
 
+pub mod instructions;
 
 struct CacheTag(u32);
 impl CacheTag {
@@ -154,8 +155,8 @@ mod pipeline {
 
             // RF
             self.rf.next_pc += 4;
-            let inst_type = decode
-            self.rf.rs =
+            //let inst_type = decode
+            //self.rf.rs =
 
             // EX
 
@@ -407,11 +408,11 @@ mod decoder {
             _ => {
                 return Instruction::I(IType::from_bytes(inst.to_le_bytes()));
             },
-            }
         }
     }
 }
 
 fn main() {
-    println!("Hello, world!");
+    println!("{:?} ", instructions::PrimaryTable[0])
+    //println!("Hello, world!");
 }
