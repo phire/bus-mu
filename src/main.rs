@@ -1,12 +1,15 @@
-
 pub mod instructions;
 
+#[derive(Clone, Copy, Debug)]
 struct CacheTag(u32);
 impl CacheTag {
-
     #[inline]
-    pub fn empty() -> CacheTag{ CacheTag(0) }
-    pub fn new(tag: u32) -> CacheTag{ CacheTag(tag & 0xfffffe00 | 1) }
+    pub fn empty() -> CacheTag {
+        CacheTag(0)
+    }
+    pub fn new(tag: u32) -> CacheTag {
+        CacheTag(tag & 0xfffffe00 | 1)
+    }
 
     #[inline]
     pub fn tag(&self) -> u32 {
@@ -18,7 +21,6 @@ impl CacheTag {
     }
 }
 
-
 struct ICache {
     data: [[u32; 8]; 512],
     tag: [CacheTag; 512],
@@ -29,7 +31,10 @@ impl ICache {
         let word = va & 0x3;
         let line = va >> 2;
 
-        (self.data[line as usize][word as usize], self.tag[line as usize])
+        (
+            self.data[line as usize][word as usize],
+            self.tag[line as usize],
+        )
     }
 }
 
@@ -71,9 +76,7 @@ impl ITlb {
         return None;
     }
 
-    pub fn miss(&mut self, va: u64, state: &MemSubsystemState) {
-
-    }
+    pub fn miss(&mut self, va: u64, state: &MemSubsystemState) {}
 }
 
 // struct JTlb {
@@ -99,7 +102,7 @@ impl ITlb {
 // }
 
 mod pipeline {
-    use crate::{ICache, ITlb, CacheTag};
+    use crate::{CacheTag, ICache, ITlb};
 
     struct InstructionCache {
         cache_data: u32,
@@ -115,18 +118,12 @@ mod pipeline {
         next_pc: u64,
         rs: u8,
         ut: u8,
-        alu: AluMode
+        alu: AluMode,
     }
 
-    struct Execute {
-
-    }
-    struct DataCache {
-
-    }
-    struct WriteBack {
-
-    }
+    struct Execute {}
+    struct DataCache {}
+    struct WriteBack {}
 
     struct Pipeline {
         ic: InstructionCache,
@@ -136,22 +133,25 @@ mod pipeline {
         wb: WriteBack,
     }
 
-
     impl Pipeline {
-        pub fn cycle(&mut self, icache: &mut ICache, itlb: &mut ITlb) {
-        // Phase 1
+        pub fn cycle(
+            &mut self,
+            icache: &mut ICache,
+            itlb: &mut ITlb,
+            mem: crate::MemSubsystemState,
+        ) {
+            // Phase 1
             // IC
-                // Nothing
+            // Nothing
             // RF
             // Instruction Cache Tag Check
-            let hit = self.ic.cache_tag.valid() &&
-                Some(self.ic.cache_tag.tag()) == self.ic.expected_tag;
+            let hit =
+                self.ic.cache_tag.valid() && Some(self.ic.cache_tag.tag()) == self.ic.expected_tag;
 
-
-        // Phase 2
+            // Phase 2
             // IC
             (self.ic.cache_data, self.ic.cache_tag) = icache.fetch(self.rf.next_pc);
-            self.ic.expected_tag = itlb.translate(self.rf.next_pc);
+            self.ic.expected_tag = itlb.translate(self.rf.next_pc, &mem);
 
             // RF
             self.rf.next_pc += 4;
@@ -159,260 +159,15 @@ mod pipeline {
             //self.rf.rs =
 
             // EX
-
-
-        }
-    }
-}
-
-mod decoder {
-    use modular_bitfield::{
-        bitfield,
-        specifiers::*,
-        BitfieldSpecifier,
-    };
-
-    #[derive(BitfieldSpecifier)]
-    #[bits = 6]
-    pub enum Opcode {
-        SPECIAL = 0b000_000,
-        REGIMM,
-        J,
-        JAL,
-        BEQ,
-        BNE,
-        BLEZ,
-        BGTZ,
-
-        ADDI = 0b001_000,
-        ADDIU,
-        SLTI,
-        SLTIU,
-        ANDI,
-        ORI,
-        XORI,
-        LUI,
-
-        COP0 = 0b010_000,
-        COP1,
-        COP2,
-        // reserved
-        BEQL,
-        BNEL,
-        BLEZL,
-        BGTZL,
-
-        DADDI = 0b011_000,
-        DADDIU,
-        LDL,
-        LDR,
-        // reserved
-        // reserved
-        // reserved
-        // reserved
-
-        LB = 0b100_000,
-        LH,
-        LWL,
-        LW,
-        LBU,
-        LHU,
-        LWR,
-        LWU,
-
-        SB = 0b101_000,
-        SH,
-        SWL,
-        SW,
-        SDL,
-        SDR,
-        SWR,
-        CACHE,
-
-        LL = 0b110_000,
-        LWC1,
-        LWC2,
-        // reserved
-        LLDe,
-        LDC1,
-        LDC2,
-        LD,
-        // reserved
-
-        SC = 0b111_000,
-        SWC1,
-        SWC2,
-        // reserved
-        SCD,
-        SCD1,
-        SCD2,
-        SD,
-        // reserved
-    }
-
-
-    #[derive(BitfieldSpecifier)]
-    #[bits = 6]
-    pub enum Special {
-        SLL = 0b000_000,
-        // reserved
-        SRR = 0b000_010,
-        SRA,
-        SLLV,
-        // reserved
-        SRLV = 0b000_110,
-        SRAV,
-
-        JR = 0b001_000,
-        JALR,
-        MOVZ,
-        MOVN,
-        SYSCALL,
-        BREAK,
-        // reserved
-        SYNC,
-
-        MFHI = 0b010_000,
-        MTHI,
-        MFLO,
-        MTLO,
-        DSLLV,
-        // reserved
-        DSRLV = 0b010_110,
-        DSRAV,
-
-        MULT = 0b011_000,
-        MULTU,
-        DIV,
-        DIVU,
-        DMULT,
-        DMULTU,
-        DDIV,
-        DDIVU,
-
-        ADD = 0b100_000,
-        ADDU,
-        SUB,
-        SUBU,
-        AND,
-        OR,
-        XOR,
-        NOR,
-
-        SLT = 0b101_000,
-        SLTU,
-        DADD,
-        DADDU,
-        DSUB,
-        DSUBU,
-        // reserved
-        // reserved
-
-        TGE = 0b110_000,
-        TGEU,
-        TLT,
-        TLTU,
-        TEQ,
-        // reserved
-        TNE,
-        // reserved
-
-        DSLL = 0b111_000,
-        // reserved
-        DSRL = 0b111_010,
-        DSRA,
-        DSLL32,
-        // reserved
-        DSRL32 = 0b111_110,
-        DSRA32,
-    }
-
-    #[derive(BitfieldSpecifier)]
-    #[bits = 5]
-    pub enum Regimm {
-        BLTZ = 0b000_00,
-        BGEZ,
-        BLTZL,
-        BGEZL,
-        // reserved
-        // reserved
-        // reserved
-        // reserved
-
-        TGEI = 0b010_00,
-        TGEIU,
-        TLTI,
-        TLTIU,
-        TEQI,
-        // reserved
-        TNEI,
-        // reserved
-
-        BLTZAL = 0b100_00,
-        BGEZAL,
-        BLTZALL,
-        BGEZALL,
-        // reserved
-        // reserved
-        // reserved
-        // reserved
-    }
-
-    #[bitfield(bits = 32)]
-    #[derive(BitfieldSpecifier)]
-    pub struct IType {
-        imm: B16,
-        rt: B5,
-        rs: B5,
-        op: Opcode,
-    }
-
-    #[bitfield(bits = 32)]
-    pub struct JType {
-        target: B26,
-        op: Opcode,
-    }
-
-    #[bitfield(bits = 32)]
-    pub struct RType {
-        funct: B6,
-        sa: B5,
-        rd: B5,
-        rt: B5,
-        rs: B5,
-        op: Opcode,
-    }
-
-    #[bitfield(bits = 32)]
-    pub struct Inst {
-        data: B26,
-        op: Opcode,
-    }
-
-    enum Instruction {
-        I(IType),
-        J(JType),
-        R(RType),
-    }
-
-    fn decode(inst: u32) -> Instruction {
-        let op = Opcode::from(inst >> 26);
-
-        match i.op() {
-            SPECIAL => {
-                return Instruction::R(RType::from_bytes(inst.to_le_bytes()));
-            },
-            J | JAL => {
-                return Instruction::J(JType::from_bytes(inst.to_le_bytes()));
-            },
-            _ => {
-                return Instruction::I(IType::from_bytes(inst.to_le_bytes()));
-            },
         }
     }
 }
 
 fn main() {
-    println!("{:?} ", instructions::PrimaryTable[0])
+    let (inst, inst_info) = instructions::decode(0x3529E463);
+    println!("{:x?} ", inst);
+    println!("{:}", inst.to_string());
+    println!("{:?} ", inst_info);
+    println!("{:}", std::mem::size_of::<instructions::Form>())
     //println!("Hello, world!");
 }
