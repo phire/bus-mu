@@ -1,20 +1,18 @@
-use std::collections::btree_set::Union;
-
 use modular_bitfield::{bitfield, specifiers::*, BitfieldSpecifier};
 
 #[bitfield(bits = 32)]
 #[derive(BitfieldSpecifier, Debug, Copy, Clone)]
 pub struct IType {
-    imm: B16,
-    rt: B5,
-    rs: B5,
+    pub imm: B16,
+    pub rt: B5,
+    pub rs: B5,
     op: B6,
 }
 
 #[bitfield(bits = 32)]
 #[derive(Debug, Copy, Clone)]
 pub struct JType {
-    target: B26,
+    pub target: B26,
     op: B6,
 }
 
@@ -22,10 +20,10 @@ pub struct JType {
 #[derive(Debug, Copy, Clone)]
 pub struct RType {
     funct: B6,
-    sa: B5,
-    rd: B5,
-    rt: B5,
-    rs: B5,
+    pub sa: B5,
+    pub rd: B5,
+    pub rt: B5,
+    pub rs: B5,
     op: B6,
 }
 
@@ -138,7 +136,7 @@ impl Instruction {
             }
 
             match form {
-                RegRegImm(_) | BranchReg | RegImmBranch(_) | RegImmTrap(_)
+                RegImm(_) | BranchReg | RegImmBranch(_) | RegImmTrap(_)
                 | RegImmTrapSigned(_) | JReg(_) | JRegLink(_) | MoveTo(_) => {
                     args.push(MIPS_REG_NAMES[i.rs() as usize].to_owned());
                 }
@@ -198,7 +196,7 @@ pub fn decode(inst: u32) -> (Instruction, &'static InstructionInfo) {
                 info = &REGIMM_TABLE[((inst >> 16) & 0x1f) as usize];
                 continue;
             }
-            InstructionInfo::Op(_, _, form) => {
+            InstructionInfo::Op(_, _, form, _, _) => {
                 return (form.to_instruction(inst), info);
             }
             InstructionInfo::Reserved => {
@@ -216,7 +214,7 @@ pub enum Form {
     J26,
 
     // IType
-    RegRegImm(bool), // true == signed
+    RegImm(bool), // true == signed
     LoadUpper,       // subcase of RegRegImm
     BranchReg,
     BranchRegReg,
@@ -261,8 +259,8 @@ impl Form {
         use Form::*;
         match self {
             BranchReg | BranchRegReg | RegImmBranch(_) => Some(ImmType::PcOffset),
-            LoadUpper | RegRegImm(false) | RegImmTrap(_) => Some(ImmType::Unsinged),
-            RegRegImm(true) | RegImmTrapSigned(_) => Some(ImmType::Signed),
+            LoadUpper | RegImm(false) | RegImmTrap(_) => Some(ImmType::Unsinged),
+            RegImm(true) | RegImmTrapSigned(_) => Some(ImmType::Signed),
             LoadBaseImm | StoreBaseImm | LoadFpuBaseImm | StoreFpuBaseImm => Some(ImmType::Offset),
             _ => None,
         }
@@ -272,7 +270,7 @@ impl Form {
         let i: IType = inst.into();
         let r: RType = inst.into();
         match self {
-            RegRegImm(_) | LoadUpper | LoadBaseImm => Dest::Gpr(i.rt()),
+            RegImm(_) | LoadUpper | LoadBaseImm => Dest::Gpr(i.rt()),
             LoadFpuBaseImm => Dest::Fpr(i.rt()),
             StoreBaseImm => Dest::Store(i.rt()),
             StoreFpuBaseImm => Dest::StoreFpr(i.rt()),
@@ -288,7 +286,7 @@ impl Form {
             J26 => {
                 Instruction::J(JType::from_bytes(inst.to_le_bytes()))
             },
-            RegRegImm(_) | LoadUpper | BranchReg | BranchRegReg | LoadBaseImm | StoreBaseImm
+            RegImm(_) | LoadUpper | BranchReg | BranchRegReg | LoadBaseImm | StoreBaseImm
             | LoadFpuBaseImm | StoreFpuBaseImm | RegImmBranch(_) | RegImmTrap(_)
             | RegImmTrapSigned(_) => {
                 Instruction::I(IType::from_bytes(inst.to_le_bytes()))
@@ -306,7 +304,7 @@ pub enum InstructionInfo {
     Reserved,
     Special,
     RegImm,
-    Op(&'static str, u8, Form),
+    Op(&'static str, u8, Form, RfMode, ExMode),
     Unimplemented(&'static str, u8),
     CopOp(),
 }
@@ -317,7 +315,7 @@ impl InstructionInfo {
             InstructionInfo::Reserved => "Reserved",
             InstructionInfo::Special => "Special",
             InstructionInfo::RegImm => "RegImm",
-            InstructionInfo::Op(name, _, _) => name,
+            InstructionInfo::Op(name, _, _, _, _) => name,
             InstructionInfo::CopOp() => "CopOp",
             InstructionInfo::Unimplemented(_, _) => todo!(),
         }
@@ -327,15 +325,88 @@ impl InstructionInfo {
             InstructionInfo::Reserved => None,
             InstructionInfo::Special => None,
             InstructionInfo::RegImm => None,
-            InstructionInfo::Op(_, _, form) => Some(form),
+            InstructionInfo::Op(_, _, form, _, _) => Some(form),
             InstructionInfo::CopOp() => None,
             InstructionInfo::Unimplemented(_, _) => None,
         }
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum RfMode {
+    JumpImm,
+    JumpImmLink, // could squash these links?
+    JumpReg,
+    JumpRegLink,
+    BranchImm1,
+    BranchImm2,
+    BranchLinkImm,
+    ImmSigned,
+    ImmUnsigned,
+    StoreOp,
+    RegReg,
+    MulDiv,
+    ShiftImm,
+    ShiftImm32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ExMode {
+    Jump,
+    Branch(CmpMode),
+    BranchLikely(CmpMode),
+    Add32,
+    AddU32,
+    Add64,
+    AddU64,
+    Sub32,
+    Sub64,
+    SubU32,
+    SubU64,
+    SetLess,
+    SetLessU,
+    And,
+    Or,
+    Xor,
+    Nor,
+    InsertUpper,
+    ShiftLeft32,
+    ShiftRight32,
+    ShiftRightArith32,
+    ShiftLeft64,
+    ShiftRight64,
+    ShiftRightArith64,
+    Mul32,
+    MulU32,
+    Div32,
+    DivU32,
+    Mul64,
+    MulU64,
+    Div64,
+    DivU64,
+    Mem(u8),
+    MemUnsigned(u8),
+    MemLeft(u8),
+    MemRight(u8),
+    MemLinked(u8),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CmpMode {
+    Eq,
+    Ne,
+    Le,
+    Ge,
+    Lt,
+    Gt,
+}
+
+
 const fn build_primary_table() -> [InstructionInfo; 64] {
     use InstructionInfo::*;
+    use RfMode::*;
+    use ExMode::*;
+    use CmpMode::*;
 
     // Almost everything in the primary table is IType.
     // The exceptions are the:
@@ -346,174 +417,187 @@ const fn build_primary_table() -> [InstructionInfo; 64] {
     [
         Special,
         RegImm,
-        Op("J", 0x2, Form::J26),
-        Op("JAL", 0x3, Form::J26),
-        Op("BEQ", 0x4, Form::BranchRegReg),
-        Op("BNE", 0x5, Form::BranchRegReg),
-        Op("BLEZ", 0x6, Form::BranchReg),
-        Op("BGTZ", 0x7, Form::BranchReg),
-        Op("ADDI", 0x8, Form::RegRegImm(true)),
-        Op("ADDIU", 0x9, Form::RegRegImm(false)),
-        Op("SLTI", 0xa, Form::RegRegImm(true)),
-        Op("SLTIU", 0xb, Form::RegRegImm(false)),
-        Op("ANDI", 0xc, Form::RegRegImm(false)),
-        Op("ORI", 0xd, Form::RegRegImm(false)),
-        Op("XORI", 0xe, Form::RegRegImm(false)),
-        Op("LUI", 0xf, Form::LoadUpper),
+        Op("J", 0x2, Form::J26, JumpImm, Jump),
+        Op("JAL", 0x3, Form::J26, JumpImmLink, Jump),
+        Op("BEQ", 0x4, Form::BranchRegReg, BranchImm2, Branch(Eq)),
+        Op("BNE", 0x5, Form::BranchRegReg,  BranchImm2, Branch(Ne)),
+        Op("BLEZ", 0x6, Form::BranchReg, BranchImm1, Branch(Le)),
+        Op("BGTZ", 0x7, Form::BranchReg, BranchImm1, Branch(Gt)),
+        // 1
+        Op("ADDI", 0x8, Form::RegImm(true), ImmSigned, Add32),
+        Op("ADDIU", 0x9, Form::RegImm(true), ImmSigned, AddU32),
+        Op("SLTI", 0xa, Form::RegImm(true), ImmSigned, SetLess),
+        Op("SLTIU", 0xb, Form::RegImm(true), ImmSigned, SetLessU),
+        Op("ANDI", 0xc, Form::RegImm(false), ImmUnsigned, And),
+        Op("ORI", 0xd, Form::RegImm(false), ImmUnsigned, Or),
+        Op("XORI", 0xe, Form::RegImm(false), ImmUnsigned, Xor),
+        Op("LUI", 0xf, Form::LoadUpper, ImmUnsigned, InsertUpper),
+        // 2
         Unimplemented("COP0", 0x10),
         Unimplemented("COP1", 0x11),
         Unimplemented("COP2", 0x12),
         Reserved,
-        Op("BEQL", 0x14, Form::BranchRegReg),
-        Op("BNEL", 0x15, Form::BranchRegReg),
-        Op("BLEZL", 0x16, Form::BranchReg),
-        Op("BGTZL", 0x17, Form::BranchReg),
-        Op("DADDI", 0x18, Form::RegRegImm(false)),
-        Op("DADDIU", 0x19, Form::RegRegImm(false)),
-        Op("LDL", 0x1a, Form::LoadBaseImm),
-        Op("LDR", 0x1b, Form::LoadBaseImm),
+        Op("BEQL", 0x14, Form::BranchRegReg, BranchImm2, BranchLikely(Eq)),
+        Op("BNEL", 0x15, Form::BranchRegReg, BranchImm2, BranchLikely(Ne)),
+        Op("BLEZL", 0x16, Form::BranchReg, BranchImm1, BranchLikely(Le)),
+        Op("BGTZL", 0x17, Form::BranchReg, BranchImm1, BranchLikely(Gt)),
+        // 3
+        Op("DADDI", 0x18, Form::RegImm(true), ImmSigned, Add64),
+        Op("DADDIU", 0x19, Form::RegImm(true), ImmSigned, AddU64),
+        Op("LDL", 0x1a, Form::LoadBaseImm, ImmSigned, MemLeft(8)),
+        Op("LDR", 0x1b, Form::LoadBaseImm, ImmSigned, MemRight(8)),
         Reserved,
         Reserved,
         Reserved,
         Reserved,
-        Op("LB", 0x20, Form::LoadBaseImm),
-        Op("LH", 0x21, Form::LoadBaseImm),
-        Op("LWL", 0x22, Form::LoadBaseImm),
-        Op("LW", 0x23, Form::LoadBaseImm),
-        Op("LBU", 0x24, Form::LoadBaseImm),
-        Op("LHU", 0x25, Form::LoadBaseImm),
-        Op("LWR", 0x26, Form::LoadBaseImm),
-        Op("LWU", 0x27, Form::LoadBaseImm),
-        Op("SB", 0x28, Form::StoreBaseImm),
-        Op("SH", 0x29, Form::StoreBaseImm),
-        Op("SWL", 0x2a, Form::StoreBaseImm),
-        Op("SW", 0x2b, Form::StoreBaseImm),
-        Op("SDL", 0x2c, Form::StoreBaseImm),
-        Op("SDR", 0x2d, Form::StoreBaseImm),
-        Op("SWR", 0x2e, Form::StoreBaseImm),
-        Op("CACHE", 0x2f, Form::StoreBaseImm),
-        Op("LL", 0x30, Form::LoadBaseImm),
-        Op("LWC1", 0x31, Form::LoadFpuBaseImm),
+        // 4
+        Op("LB", 0x20, Form::LoadBaseImm, ImmSigned, Mem(1)),
+        Op("LH", 0x21, Form::LoadBaseImm, ImmSigned, Mem(2)),
+        Op("LWL", 0x22, Form::LoadBaseImm, ImmSigned, MemLeft(4)),
+        Op("LW", 0x23, Form::LoadBaseImm, ImmSigned, Mem(4)),
+        Op("LBU", 0x24, Form::LoadBaseImm, ImmSigned, MemUnsigned(1)),
+        Op("LHU", 0x25, Form::LoadBaseImm, ImmSigned, MemUnsigned(2)),
+        Op("LWR", 0x26, Form::LoadBaseImm, ImmSigned, MemRight(4)),
+        Op("LWU", 0x27, Form::LoadBaseImm, ImmSigned, MemUnsigned(4)),
+        // 5
+        Op("SB", 0x28, Form::StoreBaseImm, StoreOp, Mem(1)),
+        Op("SH", 0x29, Form::StoreBaseImm, StoreOp, Mem(2)),
+        Op("SWL", 0x2a, Form::StoreBaseImm, StoreOp, MemLeft(4)),
+        Op("SW", 0x2b, Form::StoreBaseImm, StoreOp, Mem(4)),
+        Op("SDL", 0x2c, Form::StoreBaseImm, StoreOp, MemLeft(8)),
+        Op("SDR", 0x2d, Form::StoreBaseImm, StoreOp, MemRight(8)),
+        Op("SWR", 0x2e, Form::StoreBaseImm, StoreOp, MemRight(4)),
+        Unimplemented("Cache", 0x2f),
+        // 6
+        Op("LL", 0x30, Form::LoadBaseImm, ImmSigned, MemLinked(4)),
+        Unimplemented("LWC1", 0x31),// Form::LoadFpuBaseImm, 0),
         Unimplemented("COP2", 0x32),
         Reserved,
-        Op("LLD", 0x34, Form::LoadBaseImm),
-        Op("LDC1", 0x35, Form::LoadFpuBaseImm),
+        Op("LLD", 0x34, Form::LoadBaseImm, ImmSigned, MemLinked(8)),
+        Unimplemented("LDC1", 0x35), // Form::LoadFpuBaseImm, 0),
         Unimplemented("COP2", 0x32),
-        Op("LD", 0x37, Form::LoadBaseImm),
-        Op("SC", 0x38, Form::StoreBaseImm),
-        Op("SWC1", 0x39, Form::StoreFpuBaseImm),
+        Op("LD", 0x37, Form::LoadBaseImm, ImmSigned, Mem(8)),
+        // 7
+        Op("SC", 0x38, Form::StoreBaseImm, StoreOp, MemLinked(4)),
+        Unimplemented("SWC1", 0x39), //Form::StoreFpuBaseImm, 0),
         Unimplemented("COP2", 0x3a),
         Reserved,
-        Op("SCD", 0x3c, Form::StoreBaseImm),
-        Op("SDC1", 0x3d, Form::StoreBaseImm),
+        Op("SCD", 0x3c, Form::StoreBaseImm, StoreOp, MemLinked(8)),
+        Unimplemented("SDC1", 0x3d), //Form::StoreBaseImm, 0),
         Unimplemented("COP2", 0x3e),
-        Op("SD", 0x3f, Form::StoreBaseImm),
+        Op("SD", 0x3f, Form::StoreBaseImm, StoreOp, Mem(8)),
     ]
 }
 
 const fn build_special_table() -> [InstructionInfo; 64] {
     use InstructionInfo::*;
+    use RfMode::*;
+    use ExMode::*;
 
     [
         // 0
-        Op("SLL", 0, Form::ShiftImm(0x0)),
+        Op("SLL", 0, Form::ShiftImm(0x0), ShiftImm, ShiftLeft32),
         Reserved,
-        Op("SRL", 0, Form::ShiftImm(0x2)),
-        Op("SRA", 0, Form::ShiftImm(0x3)),
-        Op("SLLV", 0, Form::ShiftReg(0x4)),
+        Op("SRL", 0, Form::ShiftImm(0x2), ShiftImm, ShiftRight32),
+        Op("SRA", 0, Form::ShiftImm(0x3), ShiftImm, ShiftRightArith32),
+        Op("SLLV", 0, Form::ShiftReg(0x4), RegReg, ShiftLeft32),
         Reserved,
-        Op("SRLV", 0, Form::ShiftReg(0x6)),
-        Op("SRAV", 0, Form::ShiftReg(0x7)),
+        Op("SRLV", 0, Form::ShiftReg(0x6), RegReg, ShiftRight32),
+        Op("SRAV", 0, Form::ShiftReg(0x7), RegReg, ShiftRightArith32),
         // 1
-        Op("JR", 0, Form::JReg(0x8)),
-        Op("JALR", 0, Form::JRegLink(0x9)),
+        Op("JR", 0, Form::JReg(0x8), JumpReg, Jump),
+        Op("JALR", 0, Form::JRegLink(0x9), JumpRegLink, Jump),
         Reserved,
         Reserved,
-        Op("SYSCALL", 0, Form::ExceptionType(0xc)),
-        Op("BREAK", 0, Form::ExceptionType(0xd)),
+        Unimplemented("SYSCALL", 0), // Form::ExceptionType(0xc), 0),
+        Unimplemented("BREAK", 0), // Form::ExceptionType(0xd), 0),
         Reserved,
-        Op("SYNC", 0, Form::ExceptionType(0xf)),
+        Unimplemented("SYNC", 0), // Form::ExceptionType(0xf), 0),
         // 2
-        Op("MFHI", 0, Form::MoveFrom(0x10)),
-        Op("MTHI", 0, Form::MoveTo(0x11)),
-        Op("MFLO", 0, Form::MoveFrom(0x12)),
-        Op("MTLO", 0, Form::MoveTo(0x13)),
-        Op("DSLLV", 0, Form::ShiftReg(0x14)),
+        Unimplemented("MFHI", 0), // Form::MoveFrom(0x10), 0),
+        Unimplemented("MTHI", 0), // Form::MoveTo(0x11), 0),
+        Unimplemented("MFLO", 0), // Form::MoveFrom(0x12), 0),
+        Unimplemented("MTLO", 0), // Form::MoveTo(0x13), 0),
+        Op("DSLLV", 0, Form::ShiftReg(0x14), RegReg, ShiftLeft64),
         Reserved,
-        Op("DSRLV", 0, Form::ShiftReg(0x16)),
-        Op("DSRAV", 0, Form::ShiftReg(0x17)),
+        Op("DSRLV", 0, Form::ShiftReg(0x16), RegReg, ShiftRight64),
+        Op("DSRAV", 0, Form::ShiftReg(0x17), RegReg, ShiftRightArith64),
         // 3
-        Op("MULT", 0, Form::MulDiv(0x18)),
-        Op("MULTU", 0, Form::MulDiv(0x19)),
-        Op("DIV", 0, Form::MulDiv(0x1a)),
-        Op("DIVU", 0, Form::MulDiv(0x1b)),
-        Op("DMULT", 0, Form::MulDiv(0x1c)),
-        Op("DMULTU", 0, Form::MulDiv(0x1d)),
-        Op("DDIV", 0, Form::MulDiv(0x1e)),
-        Op("DDIVU", 0, Form::MulDiv(0x1f)),
+        Op("MULT", 0, Form::MulDiv(0x18), MulDiv, Mul32),
+        Op("MULTU", 0, Form::MulDiv(0x19), MulDiv, MulU32),
+        Op("DIV", 0, Form::MulDiv(0x1a), MulDiv, Div32),
+        Op("DIVU", 0, Form::MulDiv(0x1b), MulDiv, DivU32),
+        Op("DMULT", 0, Form::MulDiv(0x1c), MulDiv, Mul64),
+        Op("DMULTU", 0, Form::MulDiv(0x1d), MulDiv, MulU64),
+        Op("DDIV", 0, Form::MulDiv(0x1e),  MulDiv, Div64),
+        Op("DDIVU", 0, Form::MulDiv(0x1f), MulDiv, DivU64),
         // 4
-        Op("ADD", 0, Form::RegRegReg(0x20)),
-        Op("ADDU", 0, Form::RegRegReg(0x21)),
-        Op("SUB", 0, Form::RegRegReg(0x22)),
-        Op("SUBU", 0, Form::RegRegReg(0x23)),
-        Op("AND", 0, Form::RegRegReg(0x24)),
-        Op("OR", 0, Form::RegRegReg(0x25)),
-        Op("XOR", 0, Form::RegRegReg(0x26)),
-        Op("NOR", 0, Form::RegRegReg(0x27)),
+        Op("ADD", 0, Form::RegRegReg(0x20), RegReg, Add32),
+        Op("ADDU", 0, Form::RegRegReg(0x21), RegReg, AddU32),
+        Op("SUB", 0, Form::RegRegReg(0x22), RegReg, Sub32),
+        Op("SUBU", 0, Form::RegRegReg(0x23), RegReg, SubU32),
+        Op("AND", 0, Form::RegRegReg(0x24), RegReg, And),
+        Op("OR", 0, Form::RegRegReg(0x25), RegReg, Or),
+        Op("XOR", 0, Form::RegRegReg(0x26), RegReg, Xor),
+        Op("NOR", 0, Form::RegRegReg(0x27), RegReg, Nor),
         // 5
         Reserved,
         Reserved,
-        Op("SLT", 0, Form::RegRegReg(0x2a)),
-        Op("SLTU", 0, Form::RegRegReg(0x2b)),
-        Op("DADD", 0, Form::RegRegReg(0x2c)),
-        Op("DADDU", 0, Form::RegRegReg(0x2d)),
-        Op("DSUB", 0, Form::RegRegReg(0x2e)),
-        Op("DSUBU", 0, Form::RegRegReg(0x2f)),
+        Op("SLT", 0, Form::RegRegReg(0x2a), RegReg, SetLess),
+        Op("SLTU", 0, Form::RegRegReg(0x2b), RegReg, SetLessU),
+        Op("DADD", 0, Form::RegRegReg(0x2c), RegReg, Add64),
+        Op("DADDU", 0, Form::RegRegReg(0x2d), RegReg, AddU64),
+        Op("DSUB", 0, Form::RegRegReg(0x2e), RegReg, Sub64),
+        Op("DSUBU", 0, Form::RegRegReg(0x2f), RegReg, SubU64),
         // 6
-        Op("TGE", 0, Form::TrapRegReg(0x30)),
-        Op("TGEU", 0, Form::TrapRegReg(0x31)),
-        Op("TLT", 02, Form::TrapRegReg(0x32)),
-        Op("TLTU", 0, Form::TrapRegReg(0x33)),
-        Op("TEQ", 0, Form::TrapRegReg(0x34)),
+        //Op("TGE", 0, Form::TrapRegReg(0x30), 0),
+        Unimplemented("TGE", 0), // Form::TrapRegReg(0x30), 0),
+        Unimplemented("TGEU", 0), // Form::TrapRegReg(0x31), 0),
+        Unimplemented("TLT", 0), // Form::TrapRegReg(0x32), 0),
+        Unimplemented("TLTU", 0), // Form::TrapRegReg(0x33), 0),
+        Unimplemented("TEQ", 0), // Form::TrapRegReg(0x34), 0),
         Reserved,
-        Op("TNE", 0, Form::TrapRegReg(0x36)),
+        Unimplemented("TNE", 0), // Form::TrapRegReg(0x36), 0),
         Reserved,
         // 7
-        Op("DSLL", 0, Form::ShiftImm(0x38)),
+        Op("DSLL", 0, Form::ShiftImm(0x38), ShiftImm, ShiftLeft64),
         Reserved,
-        Op("DSRL", 0, Form::ShiftImm(0x3a)),
-        Op("DSRA", 0, Form::ShiftImm(0x3b)),
-        Op("DSLL32", 0, Form::ShiftImm(0x3c)),
+        Op("DSRL", 0, Form::ShiftImm(0x3a), ShiftImm, ShiftRight64),
+        Op("DSRA", 0, Form::ShiftImm(0x3b), ShiftImm, ShiftRightArith64),
+        Op("DSLL32", 0, Form::ShiftImm(0x3c), ShiftImm32, ShiftLeft64),
         Reserved,
-        Op("DSRL32", 0, Form::ShiftImm(0x3e)),
-        Op("DSRA32", 0, Form::ShiftImm(0x3f)),
+        Op("DSRL32", 0, Form::ShiftImm(0x3e), ShiftImm32, ShiftRight64),
+        Op("DSRA32", 0, Form::ShiftImm(0x3f), ShiftImm32, ShiftRightArith64),
     ]
 }
 
 const fn build_regimm_table() -> [InstructionInfo; 32] {
     use InstructionInfo::*;
+    use RfMode::*;
+    use ExMode::*;
+    use CmpMode::*;
 
     [
-        Op("BLTZ", 1, Form::RegImmBranch(0x0)),
-        Op("BGEZ", 1, Form::RegImmBranch(0x1)),
-        Op("BLTZL", 1, Form::RegImmBranch(0x2)),
-        Op("BGEZL", 1, Form::RegImmBranch(0x3)),
+        Op("BLTZ", 1, Form::RegImmBranch(0x0), BranchImm1, Branch(Lt)),
+        Op("BGEZ", 1, Form::RegImmBranch(0x1), BranchImm1, Branch(Ge)),
+        Op("BLTZL", 1, Form::RegImmBranch(0x2), BranchImm1, BranchLikely(Lt)),
+        Op("BGEZL", 1, Form::RegImmBranch(0x3), BranchImm1, BranchLikely(Ge)),
         Reserved,
         Reserved,
         Reserved,
         Reserved,
-        Op("TGEI", 1, Form::RegImmTrapSigned(0x8)),
-        Op("TGEIU", 1, Form::RegImmTrap(0x9)),
-        Op("TLTI", 1, Form::RegImmTrapSigned(0xa)),
-        Op("TLTIU", 1, Form::RegImmTrap(0xb)),
-        Op("TEQI", 1, Form::RegImmTrapSigned(0xc)),
+        Unimplemented("TGEI", 1), // Form::RegImmTrapSigned(0x8), 0),
+        Unimplemented("TGEIU", 1), // Form::RegImmTrapUnsigned(0x9), 0),
+        Unimplemented("TLTI", 1), // Form::RegImmTrapSigned(0xa), 0),
+        Unimplemented("TLTIU", 1), // Form::RegImmTrapUnsigned(0xb), 0),
+        Unimplemented("TEQI", 1), // Form::RegImmTrapSigned(0xc), 0),
         Reserved,
-        Op("TNEI", 1, Form::RegImmTrapSigned(0xe)),
+        Unimplemented("TNEI", 1), // Form::RegImmTrapSigned(0xe), 0),
         Reserved,
-        Op("BLTZAL", 1, Form::RegImmBranch(0x10)),
-        Op("BGEZAL", 1, Form::RegImmBranch(0x11)),
-        Op("BLTZALL", 1, Form::RegImmBranch(0x12)),
-        Op("BGEZALL", 1, Form::RegImmBranch(0x13)),
+        Op("BLTZAL", 1, Form::RegImmBranch(0x10), BranchLinkImm, Branch(Lt)),
+        Op("BGEZAL", 1, Form::RegImmBranch(0x11), BranchLinkImm, Branch(Ge)),
+        Op("BLTZALL", 1, Form::RegImmBranch(0x12), BranchLinkImm, BranchLikely(Lt)),
+        Op("BGEZALL", 1, Form::RegImmBranch(0x13), BranchLinkImm, BranchLikely(Ge)),
         Reserved,
         Reserved,
         Reserved,
@@ -528,6 +612,7 @@ const fn build_regimm_table() -> [InstructionInfo; 32] {
         Reserved,
     ]
 }
+
 
 const PRIMARY_TABLE: [InstructionInfo; 64] = build_primary_table();
 const SPECIAL_TABLE: [InstructionInfo; 64] = build_special_table();
