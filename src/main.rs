@@ -119,12 +119,15 @@ impl RegFile {
 }
 
 fn main() {
+    let pif_rom = std::fs::read("pifdata.bin").unwrap();
 
-
-    let (inst, inst_info) = instructions::decode(0x3529E463);
-    println!("{:x?} ", inst);
-    println!("{:}", inst.to_string());
-    println!("{:?} ", inst_info);
-    println!("{:}", std::mem::size_of::<instructions::Form>())
-    //println!("Hello, world!");
+    for i in 0..64 {
+        let addr = i * 4;
+        let bytes = &pif_rom[addr..(addr + 4)];
+        let word = u32::from_be_bytes(bytes.try_into().unwrap());
+        let (inst, _inst_info) = instructions::decode(word);
+        //println!("{:x?} ", inst);
+        println!("{:04x}: {:08x}    {}", addr, word, inst.to_string());
+        //println!("{:?} ", _inst_info);
+    }
 }
