@@ -55,6 +55,7 @@ pub enum Instruction {
     J(JType),
     R(RType),
     ReservedInstructionException(u32),
+    Unimplemented(u32),
 }
 
 impl Into<u32> for Instruction {
@@ -64,6 +65,7 @@ impl Into<u32> for Instruction {
             Instruction::J(j) => j.into(),
             Instruction::R(r) => r.into(),
             Instruction::ReservedInstructionException(num) => num,
+            Instruction::Unimplemented(num) => num,
         }
     }
 }
@@ -75,6 +77,7 @@ impl Instruction {
             Instruction::J(j) => j.into_bytes(),
             Instruction::R(r) => r.into_bytes(),
             Instruction::ReservedInstructionException(num) => num.to_ne_bytes(),
+            Instruction::Unimplemented(num) => num.to_ne_bytes(),
         }
     }
 }
@@ -100,7 +103,7 @@ const MIPS_REG_NAMES: [&'static str; 32] = [
     "$at",   // r1 - Reserved for assembler
     "$v0", "$v1", // r2-r3 - Function return values
     "$a0", "$a1", "$a2", "$a3", // r4-r7 - function arguments
-    "$t0", "t1", "$t2", "$t3", "$t4", "$t5", "$t6",
+    "$t0", "$t1", "$t2", "$t3", "$t4", "$t5", "$t6",
     "$t7", // r8-r15 - Temporaries (Caller saved)
     "$s0", "$s1", "$s2", "$s3", "$s4", "$s5", "$s6", "$s7", // r16-r23 - Saved  (Callee saved)
     "$t8", "$t9", // r26-r28 - Caller-saved temporaries
@@ -116,6 +119,7 @@ impl Instruction {
         let (_, info) = decode(self.into());
         info.name()
     }
+    /// Provides a string representation of the instruction (as disassembly)
     pub fn to_string(self) -> String {
         let (_, info) = decode(self.into());
 
@@ -124,10 +128,13 @@ impl Instruction {
             let i: IType = self.into();
             let r: RType = self.into();
 
+            // We will collect the arguments into this vector
             let mut args = Vec::<String>::new();
+
+            // Handles most instructions that do normal things with the destination register
             match form.dest(self) {
-                Dest::Gpr(r) | Dest::Store(r) => {
-                    args.push(MIPS_REG_NAMES[r as usize].to_owned());
+                Dest::Gpr(reg) | Dest::Store(reg) => {
+                    args.push(MIPS_REG_NAMES[reg as usize].to_owned());
                 }
                 Dest::Fpr(f) | Dest::StoreFpr(f) => {
                     args.push(format!("f{}", f));
@@ -135,15 +142,19 @@ impl Instruction {
                 Dest::None => {}
             }
 
+            // Handle the various special cases
             match form {
+                // One Reg
                 RegImm(_) | BranchReg | RegImmBranch(_) | RegImmTrap(_)
                 | RegImmTrapSigned(_) | JReg(_) | JRegLink(_) | MoveTo(_) => {
                     args.push(MIPS_REG_NAMES[i.rs() as usize].to_owned());
                 }
+                // Two Regs
                 BranchRegReg | RegRegReg(_) | TrapRegReg(_) | MulDiv(_) | ShiftReg(_) => {
                     args.push(MIPS_REG_NAMES[r.rs() as usize].to_owned());
                     args.push(MIPS_REG_NAMES[r.rt() as usize].to_owned());
                 }
+                // Load/Stores
                 LoadBaseImm | StoreBaseImm | LoadFpuBaseImm | StoreFpuBaseImm => {
                     args.push(format!(
                         "0x{:#x}({})",
@@ -151,20 +162,27 @@ impl Instruction {
                         MIPS_REG_NAMES[i.rs() as usize]
                     ));
                 }
+                // LUI (Load Upper Immediate) is a special case
                 LoadUpper => {
-                    args.push(format!("0x{:#x}", (i.imm() as u32) << 16));
+                    let imm = (i.imm() as u32) << 16;
+                    args.push(format!("{:#x}", imm as i32));
                 }
-                ShiftImm(u8) => {
+                // Shift by immediate
+                ShiftImm(_) => {
                     args.push(MIPS_REG_NAMES[r.rt() as usize].to_owned());
-                    args.push(format!("{}", u8));
+                    args.push(format!("{}", r.rs())); // the RS field gets used an immediate
                 }
+                // Absolute jumps
                 J26 => {
                     let j: JType = self.into();
-                    args.push(format!("0x{:#x}", j.target() << 2));
+                    // FIXME: Need to keep the upper 4 bits of the current PC
+                    args.push(format!("{:#x}", j.target() << 2));
                 }
+                // These don't have any arguments
                 ExceptionType(_) | MoveFrom(_) => {}
             }
 
+            // handle basic immediate formats
             match form.imm_type() {
                 Some(ImmType::Unsinged) => {
                     args.push(format!("{:#x}", i.imm()));
@@ -172,9 +190,19 @@ impl Instruction {
                 Some(ImmType::Signed) => {
                     args.push(format!("{:#x}", i.imm() as i16 as i32));
                 }
+                Some(ImmType::PcOffset) => {
+                    let offset = ((i.imm() as i16 as i32) << 2) + 4;
+                    if offset > 0 {
+                        args.push(format!("+{:#x}", offset));
+                    } else {
+                        args.push(format!("-{:#x}", offset.abs()));
+                    }
+                }
+                // Other immediate formats are handled above, as a premature optimization
                 _ => {}
             }
 
+            // Finally, join the arguments together and build the final string
             return format!("{:<7} {}", info.name(), args.join(", "));
         } else {
             return info.name().to_owned();
@@ -203,7 +231,7 @@ pub fn decode(inst: u32) -> (Instruction, &'static InstructionInfo) {
                 return (Instruction::ReservedInstructionException(inst), info);
             }
             _ => {
-                todo!("unimplemented");
+                return (Instruction::Unimplemented(inst), info);
             }
         }
     }
@@ -242,6 +270,7 @@ pub enum Form {
 pub enum ImmType {
     Unsinged,
     Signed,
+    SignedUpper,
     PcOffset,
     Offset,
 }
@@ -259,8 +288,9 @@ impl Form {
         use Form::*;
         match self {
             BranchReg | BranchRegReg | RegImmBranch(_) => Some(ImmType::PcOffset),
-            LoadUpper | RegImm(false) | RegImmTrap(_) => Some(ImmType::Unsinged),
+            RegImm(false) | RegImmTrap(_) => Some(ImmType::Unsinged),
             RegImm(true) | RegImmTrapSigned(_) => Some(ImmType::Signed),
+            LoadUpper => Some(ImmType::SignedUpper),
             LoadBaseImm | StoreBaseImm | LoadFpuBaseImm | StoreFpuBaseImm => Some(ImmType::Offset),
             _ => None,
         }
@@ -317,7 +347,7 @@ impl InstructionInfo {
             InstructionInfo::RegImm => "RegImm",
             InstructionInfo::Op(name, _, _, _, _) => name,
             InstructionInfo::CopOp() => "CopOp",
-            InstructionInfo::Unimplemented(_, _) => todo!(),
+            InstructionInfo::Unimplemented(name, _) => name,
         }
     }
     pub fn form(&self) -> Option<&Form> {
@@ -612,7 +642,6 @@ const fn build_regimm_table() -> [InstructionInfo; 32] {
         Reserved,
     ]
 }
-
 
 const PRIMARY_TABLE: [InstructionInfo; 64] = build_primary_table();
 const SPECIAL_TABLE: [InstructionInfo; 64] = build_special_table();
