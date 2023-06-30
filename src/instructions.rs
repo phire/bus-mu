@@ -120,7 +120,7 @@ impl Instruction {
         info.name()
     }
     /// Provides a string representation of the instruction (as disassembly)
-    pub fn to_string(self) -> String {
+    pub fn disassemble(self, address:u64) -> String {
         let (_, info) = decode(self.into());
 
         use Form::*;
@@ -175,8 +175,8 @@ impl Instruction {
                 // Absolute jumps
                 J26 => {
                     let j: JType = self.into();
-                    // FIXME: Need to keep the upper 4 bits of the current PC
-                    args.push(format!("{:#x}", j.target() << 2));
+                    let target = (address & !0x0fff_ffff) | ((j.target() as u64) << 2);
+                    args.push(format!("{:#x}", target));
                 }
                 // These don't have any arguments
                 ExceptionType(_) | MoveFrom(_) => {}
@@ -191,12 +191,9 @@ impl Instruction {
                     args.push(format!("{:#x}", i.imm() as i16 as i32));
                 }
                 Some(ImmType::PcOffset) => {
-                    let offset = ((i.imm() as i16 as i32) << 2) + 4;
-                    if offset > 0 {
-                        args.push(format!("+{:#x}", offset));
-                    } else {
-                        args.push(format!("-{:#x}", offset.abs()));
-                    }
+                    let offset = (i.imm() as i16 as i64) << 2;
+                    let target = address as i64 + offset + 4;
+                    args.push(format!("{:010x}", target as u64));
                 }
                 // Other immediate formats are handled above, as a premature optimization
                 _ => {}

@@ -127,7 +127,7 @@ fn main() {
         let word = u32::from_be_bytes(bytes.try_into().unwrap());
         let (inst, _inst_info) = instructions::decode(word);
         //println!("{:x?} ", inst);
-        println!("{:04x}: {:08x}    {}", addr, word, inst.to_string());
+        println!("{:04x}: {:08x}    {}", addr, word, inst.disassemble(addr as u64));
         //println!("{:?} ", _inst_info);
     }
 }
