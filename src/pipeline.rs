@@ -145,7 +145,8 @@ impl Pipeline {
                 ex.alu_out = !(rf.alu_a | rf.alu_b);
             }
             ExMode::InsertUpper => {
-                ex.alu_out = (rf.alu_a & 0xFFFF) | (rf.alu_b << 16);
+                let out = (rf.alu_b as u32) << 16;
+                ex.alu_out = out as i32 as u64; // sign extend
             }
             ExMode::ShiftLeft32 => {
                 let out = (rf.alu_a as u32).wrapping_shl(rf.alu_b as u32);
