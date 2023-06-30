@@ -1,5 +1,6 @@
 pub mod instructions;
 pub mod pipeline;
+pub mod coprocessor0;
 
 #[derive(Clone, Copy, Debug)]
 struct CacheTag(u32);

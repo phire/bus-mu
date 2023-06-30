@@ -266,6 +266,7 @@ impl Pipeline {
             ExMode::MemLeft(_) => todo!(),
             ExMode::MemRight(_) => todo!(),
             ExMode::MemLinked(_) => todo!(),
+            ExMode::ExUnimplemented => todo!()
         }
     }
     pub fn cycle(
@@ -393,6 +394,9 @@ impl Pipeline {
                         self.rf.alu_a = r.rs() as u64 + 32;
                         self.rf.alu_b = regfile.read(r.rt());
                         self.rf.write_back = r.rd();
+                    }
+                    RfMode::RfUnimplemented => {
+                        todo!("Implement")
                     }
                 }
             } else {

@@ -1,4 +1,5 @@
 use modular_bitfield::{bitfield, specifiers::*};
+use crate::coprocessor0::COP0_REG_NAMES;
 
 #[bitfield(bits = 32)]
 #[derive(Debug, Copy, Clone)]
@@ -163,6 +164,11 @@ impl Instruction {
                     args.push(MIPS_REG_NAMES[r.rs() as usize].to_owned());
                     args.push(MIPS_REG_NAMES[r.rt() as usize].to_owned());
                 }
+                // Cop single-register
+                CopReg => {
+                    args.push(MIPS_REG_NAMES[r.rt() as usize].to_owned());
+                    args.push(COP0_REG_NAMES[r.rd() as usize].to_owned());
+                }
                 // Load/Stores
                 LoadBaseImm | StoreBaseImm | LoadFpuBaseImm | StoreFpuBaseImm => {
                     args.push(format!(
@@ -231,6 +237,14 @@ pub fn decode(inst: u32) -> (Instruction, &'static InstructionInfo) {
                 info = &REGIMM_TABLE[inst.rt() as usize];
                 continue;
             }
+            InstructionInfo::CopOp(0) => {
+                if inst.rs() < 16 {
+                    info = &COP0_TABLE[inst.rs() as usize];
+                } else {
+                    info = &COP0_FN_TABLE[inst.funct() as usize];
+                }
+                continue;
+            }
             InstructionInfo::Op(_, _, form, _, _) => {
                 return (form.to_instruction(inst), info);
             }
@@ -272,6 +286,9 @@ pub enum Form {
     RegRegReg(u8),
     TrapRegReg(u8),
     ExceptionType(u8),
+
+    // Coprocessor
+    CopReg,
 }
 
 pub enum ImmType {
@@ -329,7 +346,7 @@ impl Form {
                 Instruction::I(inst.into())
             },
             JReg(_) | JRegLink(_) | ShiftImm(_) | ShiftReg(_) | MoveFrom(_) | MoveTo(_)
-            | MulDiv(_) | RegRegReg(_) | TrapRegReg(_) | ExceptionType(_) => {
+            | MulDiv(_) | RegRegReg(_) | TrapRegReg(_) | ExceptionType(_) | CopReg => {
                 Instruction::R(inst)
             }
         }
@@ -343,7 +360,8 @@ pub enum InstructionInfo {
     RegImm,
     Op(&'static str, u8, Form, RfMode, ExMode),
     Unimplemented(&'static str, u8),
-    CopOp(),
+    CopOp(u8),
+    CopFn,
 }
 
 impl InstructionInfo {
@@ -353,7 +371,8 @@ impl InstructionInfo {
             InstructionInfo::Special => "Special",
             InstructionInfo::RegImm => "RegImm",
             InstructionInfo::Op(name, _, _, _, _) => name,
-            InstructionInfo::CopOp() => "CopOp",
+            InstructionInfo::CopOp(_) => "CopOp",
+            InstructionInfo::CopFn => "CopFn",
             InstructionInfo::Unimplemented(name, _) => name,
         }
     }
@@ -363,7 +382,8 @@ impl InstructionInfo {
             InstructionInfo::Special => None,
             InstructionInfo::RegImm => None,
             InstructionInfo::Op(_, _, form, _, _) => Some(form),
-            InstructionInfo::CopOp() => None,
+            InstructionInfo::CopOp(_) => None,
+            InstructionInfo::CopFn => None,
             InstructionInfo::Unimplemented(_, _) => None,
         }
     }
@@ -385,6 +405,7 @@ pub enum RfMode {
     MulDiv,
     ShiftImm,
     ShiftImm32,
+    RfUnimplemented,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -426,6 +447,7 @@ pub enum ExMode {
     MemLeft(u8),
     MemRight(u8),
     MemLinked(u8),
+    ExUnimplemented,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -470,9 +492,9 @@ const fn build_primary_table() -> [InstructionInfo; 64] {
         Op("XORI", 0xe, Form::RegImm(false), ImmUnsigned, Xor),
         Op("LUI", 0xf, Form::LoadUpper, ImmUnsigned, InsertUpper),
         // 2
-        Unimplemented("COP0", 0x10),
-        Unimplemented("COP1", 0x11),
-        Unimplemented("COP2", 0x12),
+        CopOp(0),
+        CopOp(1),
+        CopOp(2),
         Reserved,
         Op("BEQL", 0x14, Form::BranchRegReg, BranchImm2, BranchLikely(Eq)),
         Op("BNEL", 0x15, Form::BranchRegReg, BranchImm2, BranchLikely(Ne)),
@@ -650,6 +672,46 @@ const fn build_regimm_table() -> [InstructionInfo; 32] {
     ]
 }
 
+const fn build_cop0_table() -> [InstructionInfo; 16] {
+    use InstructionInfo::*;
+
+    [
+        // 0
+        Unimplemented("MFC0", 0x0),
+        Unimplemented("DMFC0", 0x1),
+        Unimplemented("CFC0", 0x2),
+        Reserved,
+        Op("MTC0", 0x4, Form::CopReg, RfMode::RfUnimplemented, ExMode::ExUnimplemented),
+        Unimplemented("DMTC0", 0x5),
+        Unimplemented("CTC0", 0x6),
+        Reserved,
+        // 8
+        Unimplemented("BCC0", 0x8),
+        Reserved,
+        Reserved,
+        Reserved,
+        Reserved,
+        Reserved,
+        Reserved,
+        Reserved,
+    ]
+}
+
+const fn build_cop0_fn_table() -> [InstructionInfo; 64] {
+    use InstructionInfo::*;
+
+    let mut table = [Reserved; 64];
+    table[0x1] = Unimplemented("TLBR", 1);
+    table[0x2] = Unimplemented("TLBWI", 2);
+    table[0x6] = Unimplemented("TLBWR", 6);
+    table[0x8] = Unimplemented("TLBP", 8);
+    table[0x18] = Unimplemented("ERET", 8);
+
+    return table;
+}
+
 const PRIMARY_TABLE: [InstructionInfo; 64] = build_primary_table();
 const SPECIAL_TABLE: [InstructionInfo; 64] = build_special_table();
 const REGIMM_TABLE: [InstructionInfo; 32] = build_regimm_table();
+const COP0_TABLE: [InstructionInfo; 16] = build_cop0_table();
+const COP0_FN_TABLE: [InstructionInfo; 64] = build_cop0_fn_table();
