@@ -280,13 +280,13 @@ impl Pipeline {
         // ...
         // RF
         // Instruction Cache Tag Check
-        let hit =
+        let _hit =
             self.ic.cache_tag.valid() && Some(self.ic.cache_tag.tag()) == self.ic.expected_tag;
 
         // DC Phase 1
-        if (self.ex.mem_size != 0) {
-            let addr = self.ex.addr;
-            let data = self.ex.alu_out;
+        if self.ex.mem_size != 0 {
+            let _addr = self.ex.addr;
+            let _data = self.ex.alu_out;
             let size = self.ex.mem_size;
             match size {
                 // 1 => mem.write_byte(addr, data as u8),

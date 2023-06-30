@@ -1,11 +1,12 @@
-use modular_bitfield::{bitfield, specifiers::*, BitfieldSpecifier};
+use modular_bitfield::{bitfield, specifiers::*};
 
 #[bitfield(bits = 32)]
-#[derive(BitfieldSpecifier, Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct IType {
     pub imm: B16,
     pub rt: B5,
     pub rs: B5,
+    #[skip]
     op: B6,
 }
 
@@ -13,24 +14,19 @@ pub struct IType {
 #[derive(Debug, Copy, Clone)]
 pub struct JType {
     pub target: B26,
+    #[skip]
     op: B6,
 }
 
 #[bitfield(bits = 32)]
 #[derive(Debug, Copy, Clone)]
 pub struct RType {
-    funct: B6,
+    pub funct: B6,
     pub sa: B5,
     pub rd: B5,
     pub rt: B5,
     pub rs: B5,
-    op: B6,
-}
-
-#[bitfield(bits = 32)]
-pub struct Inst {
-    data: B26,
-    op: B6,
+    pub op: B6,
 }
 
 impl Into<u32> for IType {
@@ -46,6 +42,18 @@ impl Into<u32> for JType {
 impl Into<u32> for RType {
     fn into(self) -> u32 {
         u32::from_ne_bytes(self.into_bytes())
+    }
+}
+
+impl Into<IType> for RType {
+    fn into(self) -> IType {
+        IType::from_bytes(self.into_bytes())
+    }
+}
+
+impl Into<JType> for RType {
+    fn into(self) -> JType {
+        JType::from_bytes(self.into_bytes())
     }
 }
 
@@ -119,6 +127,7 @@ impl Instruction {
         let (_, info) = decode(self.into());
         info.name()
     }
+
     /// Provides a string representation of the instruction (as disassembly)
     pub fn disassemble(self, address:u64) -> String {
         let (_, info) = decode(self.into());
@@ -208,27 +217,28 @@ impl Instruction {
 }
 
 pub fn decode(inst: u32) -> (Instruction, &'static InstructionInfo) {
-    let op = inst >> 26;
-    let mut info = &PRIMARY_TABLE[op as usize];
+    // we pre-decode to R-Type, as it's the only type decode logic uses
+    let inst = RType::from_bytes(inst.to_le_bytes());
 
+    let mut info = &PRIMARY_TABLE[inst.op() as usize];
     loop {
         match info {
             InstructionInfo::Special => {
-                info = &SPECIAL_TABLE[(inst & 0x3f) as usize];
+                info = &SPECIAL_TABLE[inst.funct() as usize];
                 continue;
             }
             InstructionInfo::RegImm => {
-                info = &REGIMM_TABLE[((inst >> 16) & 0x1f) as usize];
+                info = &REGIMM_TABLE[inst.rt() as usize];
                 continue;
             }
             InstructionInfo::Op(_, _, form, _, _) => {
                 return (form.to_instruction(inst), info);
             }
             InstructionInfo::Reserved => {
-                return (Instruction::ReservedInstructionException(inst), info);
+                return (Instruction::ReservedInstructionException(inst.into()), info);
             }
             _ => {
-                return (Instruction::Unimplemented(inst), info);
+                return (Instruction::Unimplemented(inst.into()), info);
             }
         }
     }
@@ -307,20 +317,20 @@ impl Form {
         }
     }
 
-    pub fn to_instruction(&self, inst: u32) -> Instruction {
+    pub fn to_instruction(&self, inst: RType) -> Instruction {
         use Form::*;
         match self {
             J26 => {
-                Instruction::J(JType::from_bytes(inst.to_le_bytes()))
+                Instruction::J(inst.into())
             },
             RegImm(_) | LoadUpper | BranchReg | BranchRegReg | LoadBaseImm | StoreBaseImm
             | LoadFpuBaseImm | StoreFpuBaseImm | RegImmBranch(_) | RegImmTrap(_)
             | RegImmTrapSigned(_) => {
-                Instruction::I(IType::from_bytes(inst.to_le_bytes()))
+                Instruction::I(inst.into())
             },
             JReg(_) | JRegLink(_) | ShiftImm(_) | ShiftReg(_) | MoveFrom(_) | MoveTo(_)
             | MulDiv(_) | RegRegReg(_) | TrapRegReg(_) | ExceptionType(_) => {
-                Instruction::R(RType::from_bytes(inst.to_le_bytes()))
+                Instruction::R(inst)
             }
         }
     }

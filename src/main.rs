@@ -77,7 +77,7 @@ impl ITlb {
         return None;
     }
 
-    pub fn miss(&mut self, va: u64, state: &MemSubsystemState) {}
+    pub fn miss(&mut self, _va: u64, _state: &MemSubsystemState) {}
 }
 
 // struct JTlb {
