@@ -4,7 +4,7 @@ pub struct RegFile {
     regs: [u64; 32],
     bypass_reg: u8,
     bypass_val: Option<u64>,
-    hazzard: bool,
+    hazard: bool,
     pub hilo: [u64; 2],
 }
 
@@ -14,11 +14,11 @@ impl RegFile {
             regs: [0; 32],
             bypass_reg: 0,
             bypass_val: None,
-            hazzard: false,
+            hazard: false,
             hilo: [0; 2],
         }
     }
-    pub fn read(&self, reg: u8) -> u64 {
+    pub fn read(&mut self, reg: u8) -> u64 {
         if reg == self.bypass_reg {
             match self.bypass_val {
                 Some(val) => {
@@ -27,6 +27,7 @@ impl RegFile {
                 },
                 None => {
                     println!("Hazzard detected {}", MIPS_REG_NAMES[reg as usize]);
+                    self.hazard = true;
                     return 0;
                 },
             }
@@ -41,6 +42,7 @@ impl RegFile {
         }
     }
     pub fn bypass(&mut self, reg: u8, val: Option<u64>) {
+        self.hazard = false;
         if reg == 0 {
             self.bypass_reg = 0xff;
         } else {
@@ -49,6 +51,6 @@ impl RegFile {
         }
     }
     pub fn hazard_detected(&self) -> bool {
-        self.hazzard
+        self.hazard
     }
 }

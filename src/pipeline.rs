@@ -150,32 +150,37 @@ impl Pipeline {
                 self.dc.cache_attempt = dcache.open(addr);
                 // TODO: Implement TLB lookups
                 self.dc.tlb_tag = CacheTag::new_uncached((addr as u32) & 0x1fff_ffff);
+            }
 
+            if self.ex.mem_size != 0 || self.ex.writeback_reg != 0 {
                 // Forward from EX
                 self.dc.alu_out = self.ex.alu_out;
                 self.dc.writeback_reg = self.ex.writeback_reg;
                 self.dc.store = self.ex.store;
                 self.dc.mem_size = self.ex.mem_size;
             }
-
-            if self.ex.mem_size != 0 || self.ex.writeback_reg != 0 {
-
-            }
         }
         // ================
         // Stage 3: Execute
         // ================
         {
+            // PERF: we can probably move these stalls/skips/hazards into the jump table
             if self.rf.stalled {
                 self.ex.mem_size = 0;
                 self.ex.writeback_reg = 0;
                 return ExitReason::Ok;
             }
-            if regfile.hazard_detected() {
+
+            if self.ex.skip_next || regfile.hazard_detected() {
+                // branch likely instructions invalidate the branch-delay slot's instruction
+                // if they aren't taken
+                self.ex.skip_next = false;
                 self.ex.mem_size = 0;
                 self.ex.writeback_reg = 0;
             } else {
                 Self::run_ex_phase1(&self.rf, &mut self.ex, &mut regfile.hilo);
+
+                // TODO: return here if ex needs multiple cycles?
             }
 
             regfile.bypass(
@@ -219,16 +224,14 @@ impl Pipeline {
                 }
             } else {
                 // ICache hit. We can continue with the rest of this stage
-                self.rf.next_pc = self.rf.next_pc + 4;
-                if !self.ex.skip_next {
-                    Self::run_regfile(self.ic.cache_data, &mut self.rf, &regfile);
-                }
+                Self::run_regfile(self.ic.cache_data, &mut self.rf, regfile);
 
                 if regfile.hazard_detected() {
                     // regfile detected a hazard (register value is dependent on memory load)
                     // The output of this stage is invalid, but we can exit early and retry next cycle
                     return ExitReason::Ok;
                 }
+                self.rf.next_pc = self.rf.next_pc + 4;
             }
         }
 
@@ -241,7 +244,7 @@ impl Pipeline {
         return ExitReason::Ok;
     }
 
-    fn run_regfile(instruction_word: u32, rf: &mut RegisterFile, regfile: &RegFile) {
+    fn run_regfile(instruction_word: u32, rf: &mut RegisterFile, regfile: &mut RegFile) {
         let (inst, inst_info) = crate::instructions::decode(instruction_word);
         let j: JType = inst.into();
         let i: IType = inst.into();
@@ -249,6 +252,7 @@ impl Pipeline {
 
         if let InstructionInfo::Op(_, _, _, rf_mode, ex_mode) = *inst_info {
             rf.ex_mode = ex_mode;
+            //println!("RF: {:?}", rf_mode);
             match rf_mode {
                 // PERF: Maybe this can be simplified down to just a few flags
                 RfMode::JumpImm => {
@@ -347,6 +351,8 @@ impl Pipeline {
         ex.trap = false;
         ex.mem_size = 0;
         ex.writeback_reg = rf.writeback_reg;
+
+        //println!("EX: {:?}", rf.ex_mode);
 
         match rf.ex_mode {
             ExMode::Jump => {
