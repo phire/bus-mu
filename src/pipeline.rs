@@ -231,7 +231,7 @@ impl Pipeline {
                     // The output of this stage is invalid, but we can exit early and retry next cycle
                     return ExitReason::Ok;
                 }
-                self.rf.next_pc = self.rf.next_pc + 4;
+                self.rf.next_pc = self.ex.next_pc + 4;
             }
         }
 
