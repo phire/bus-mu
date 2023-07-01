@@ -107,7 +107,7 @@ impl Into<JType> for Instruction {
     }
 }
 
-const MIPS_REG_NAMES: [&'static str; 32] = [
+pub const MIPS_REG_NAMES: [&'static str; 32] = [
     "$zero", // Always 0
     "$at",   // r1 - Reserved for assembler
     "$v0", "$v1", // r2-r3 - Function return values

@@ -21,7 +21,7 @@ struct RegisterFile {
     alu_a: u64,
     alu_b: u64,
     temp: u64, // Either result of jump calculation, or value to store
-    write_back: u8,
+    writeback_reg: u8,
     ex_mode: ExMode,
     cmp_mode: CmpMode,
     store: bool,
@@ -71,6 +71,8 @@ pub enum MemoryResponce
     ICacheFill([u32; 8]),
     DCacheFill([u8; 16]),
     UncachedInstructionRead(u32),
+    UncachedDataRead(u64),
+    UncachedDataWrite,
 }
 
 pub enum ExitReason
@@ -143,7 +145,6 @@ impl Pipeline {
         // ==================
         {
             if self.ex.mem_size != 0 {
-
                 let addr = self.ex.addr;
 
                 self.dc.cache_attempt = dcache.open(addr);
@@ -156,15 +157,34 @@ impl Pipeline {
                 self.dc.store = self.ex.store;
                 self.dc.mem_size = self.ex.mem_size;
             }
+
+            if self.ex.mem_size != 0 || self.ex.writeback_reg != 0 {
+
+            }
         }
         // ================
         // Stage 3: Execute
         // ================
-        if self.rf.stalled {
-            self.ex.mem_size = 0;
-            return ExitReason::Ok;
+        {
+            if self.rf.stalled {
+                self.ex.mem_size = 0;
+                self.ex.writeback_reg = 0;
+                return ExitReason::Ok;
+            }
+            if regfile.hazard_detected() {
+                self.ex.mem_size = 0;
+                self.ex.writeback_reg = 0;
+            } else {
+                Self::run_ex_phase1(&self.rf, &mut self.ex, &mut regfile.hilo);
+            }
+
+            regfile.bypass(
+                self.ex.writeback_reg,
+                match self.ex.mem_size {
+                    0 => Some(self.ex.alu_out),
+                    _ => None
+                });
         }
-        Self::run_ex_phase1(&self.rf, &mut self.ex, &mut regfile.hilo);
 
         // ======================
         // Stage 2: Register File
@@ -203,6 +223,12 @@ impl Pipeline {
                 if !self.ex.skip_next {
                     Self::run_regfile(self.ic.cache_data, &mut self.rf, &regfile);
                 }
+
+                if regfile.hazard_detected() {
+                    // regfile detected a hazard (register value is dependent on memory load)
+                    // The output of this stage is invalid, but we can exit early and retry next cycle
+                    return ExitReason::Ok;
+                }
             }
         }
 
@@ -228,84 +254,84 @@ impl Pipeline {
                 RfMode::JumpImm => {
                     let upper_bits = rf.next_pc & 0xffff_ffff_f000_0000;
                     rf.temp = (j.target() as u64) << 2 | upper_bits;
-                    rf.write_back = 0;
+                    rf.writeback_reg = 0;
                 }
                 RfMode::JumpImmLink => {
                     let upper_bits = rf.next_pc & 0xffff_ffff_f000_0000;
                     rf.temp = (j.target() as u64) << 2 | upper_bits;
-                    rf.write_back = 31;
+                    rf.writeback_reg = 31;
                 }
                 RfMode::JumpReg => {
                     rf.temp = regfile.read(r.rs());
-                    rf.write_back = 0;
+                    rf.writeback_reg = 0;
                 }
                 RfMode::JumpRegLink => {
                     rf.temp = regfile.read(r.rs());
-                    rf.write_back = r.rd();
+                    rf.writeback_reg = r.rd();
                 }
                 RfMode::BranchImm1 => {
                     rf.alu_a = regfile.read(i.rs());
                     rf.alu_b = 0;
                     let offset = (i.imm() as i16 as u64) << 2;
                     rf.temp = rf.next_pc + offset;
-                    rf.write_back = 0;
+                    rf.writeback_reg = 0;
                 }
                 RfMode::BranchImm2 => {
                     rf.alu_a = regfile.read(i.rs());
                     rf.alu_b = regfile.read(i.rt());
                     let offset = (i.imm() as i16 as u64) << 2;
                     rf.temp = rf.next_pc + offset;
-                    rf.write_back = 0;
+                    rf.writeback_reg = 0;
                 }
                 RfMode::BranchLinkImm => {
                     rf.alu_a = regfile.read(i.rs());
                     rf.alu_b = 0;
                     let offset = (i.imm() as i16 as u64) << 2;
                     rf.temp = rf.next_pc + offset;
-                    rf.write_back = 31;
+                    rf.writeback_reg = 31;
                 }
                 RfMode::ImmSigned => {
                     rf.alu_a = regfile.read(i.rs());
                     rf.alu_b = i.imm() as i16 as u64;
-                    rf.write_back = i.rt();
+                    rf.writeback_reg = i.rt();
                     rf.store = false;
                 }
                 RfMode::ImmUnsigned => {
                     rf.alu_a = regfile.read(i.rs());
                     rf.alu_b = i.imm() as u64;
-                    rf.write_back = i.rt();
+                    rf.writeback_reg = i.rt();
                 }
                 RfMode::StoreOp => {
                     rf.alu_a = regfile.read(i.rs());
                     rf.alu_b = i.imm() as u64;
-                    rf.write_back = 0;
+                    rf.writeback_reg = 0;
                     rf.temp = regfile.read(i.rt());
                     rf.store = true;
                 }
                 RfMode::RegReg => {
                     rf.alu_a = regfile.read(r.rs());
                     rf.alu_b = regfile.read(r.rt());
-                    rf.write_back = r.rd();
+                    rf.writeback_reg = r.rd();
                 }
                 RfMode::RegRegNoWrite => {
                     rf.alu_a = regfile.read(r.rs());
                     rf.alu_b = regfile.read(r.rt());
-                    rf.write_back = 0;
+                    rf.writeback_reg = 0;
                 }
                 RfMode::SmallImm => {
                     rf.alu_a = r.rs() as u64;
                     rf.alu_b = regfile.read(r.rt());
-                    rf.write_back = r.rd();
+                    rf.writeback_reg = r.rd();
                 }
                 RfMode::SmallImmOffset32 => {
                     rf.alu_a = r.rs() as u64 + 32;
                     rf.alu_b = regfile.read(r.rt());
-                    rf.write_back = r.rd();
+                    rf.writeback_reg = r.rd();
                 }
                 RfMode::SmallImmNoWrite => {
                     rf.alu_a = r.rs() as u64;
                     rf.alu_b = regfile.read(r.rt());
-                    rf.write_back = 0;
+                    rf.writeback_reg = 0;
                 }
                 RfMode::RfUnimplemented => {
                     println!("Unimplemented Rfmode");
@@ -320,6 +346,7 @@ impl Pipeline {
         ex.next_pc = rf.next_pc;
         ex.trap = false;
         ex.mem_size = 0;
+        ex.writeback_reg = rf.writeback_reg;
 
         match rf.ex_mode {
             ExMode::Jump => {
@@ -566,7 +593,7 @@ pub fn create() -> Pipeline {
             alu_a: 0,
             alu_b: 0,
             temp: 0,
-            write_back: 0,
+            writeback_reg: 0,
             ex_mode: ExMode::Add32,
             cmp_mode: CmpMode::Eq,
             store: false,
