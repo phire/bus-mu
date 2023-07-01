@@ -47,7 +47,7 @@ fn main() {
                 };
 
                 let (inst, _inst_info) = instructions::decode(word);
-                icache.finish_uncached_read(word, addr);
+                pipeline.memory_responce(pipeline::MemoryResponce::UncachedInstructionRead(word), &mut icache, &mut dcache);
                 println!("(uncached) {:04x}: {:08x}    {}", addr, word, inst.disassemble(addr as u64));
                 continue;
             }

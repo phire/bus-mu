@@ -2,46 +2,130 @@ use crate::pipeline::MemoryReq;
 
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
-pub struct CacheTag(u32);
+pub struct CacheTag {
+    val: u32,
+}
 impl CacheTag {
     #[inline]
     pub fn empty() -> CacheTag {
-        CacheTag(0)
+        CacheTag{ val: 0 }
     }
     pub fn invalid() -> CacheTag {
-        CacheTag(0xcccc_ccce)
+        CacheTag{ val: 0xcccc_ccce }
     }
 
     pub fn new(tag: u32) -> CacheTag {
-        CacheTag(tag & 0xffff_e000 | 1)
+        // Both DCache and ICache use bits 31:12 as the tag
+        // This does cause some overlap with the line. ICache uses bits 13:5 and DCache uses bits 12:4
+        CacheTag{ val: tag & 0xffff_f000 | 1 }
     }
 
     pub fn new_uncached(addr: u32) -> CacheTag {
-        CacheTag(addr | 3)
+        CacheTag{ val: addr | 3 }
     }
 
     #[inline]
     pub fn tag(&self) -> u32 {
-         self.0 & 0xffff_e000
+         self.val & 0xffff_f000
     }
 
     pub fn is_valid(&self) -> bool {
-        (self.0 & 1) == 1
+        (self.val & 1) == 1
     }
 
     pub fn is_uncached(&self) -> bool {
-        (self.0 & 3) == 3
+        (self.val & 3) == 3
     }
 
     pub fn get_uncached(&self) -> u32 {
-        self.0 & 0xffff_fffc
+        self.val & 0xffff_fffc
     }
 
     pub fn is_dirty(&self) -> bool {
-        (self.0 & 7) == 5
+        (self.val & 7) == 5
     }
 }
 
+pub struct ICacheLine {
+    val: u16
+}
+
+impl ICacheLine {
+    pub fn new(addr: u32) -> ICacheLine {
+        ICacheLine{ val: addr as u16 & 0x3fe0 }
+    }
+
+    pub fn line(self) -> usize {
+        (self.val >> 5) as usize
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ICacheAddress {
+    val: u32
+}
+
+impl ICacheAddress {
+    pub fn new(addr: u32) -> ICacheAddress {
+        ICacheAddress{ val: addr & 0xffff_fffc }
+    }
+
+    pub fn tag(self) -> CacheTag {
+        CacheTag::new(self.val)
+    }
+
+    pub fn line(self) -> usize {
+        ICacheLine::new(self.val).line()
+    }
+
+    pub fn offset(self) -> usize {
+        (self.val & 0x1c) as usize >> 2
+    }
+
+    pub fn value(self) -> u32 {
+        self.val
+    }
+}
+
+pub struct DCacheLine {
+    val: u16
+}
+
+impl DCacheLine {
+    pub fn new(addr: u32) -> DCacheLine {
+        DCacheLine{ val: addr as u16 & 0x1ff0 }
+    }
+
+    pub fn line(self) -> usize {
+        (self.val >> 4) as usize
+    }
+}
+
+pub struct DCacheAddress {
+    val: u32
+}
+
+impl DCacheAddress {
+    pub fn new(addr: u32) -> DCacheAddress {
+        DCacheAddress{ val: addr }
+    }
+
+    pub fn tag(self) -> CacheTag {
+        CacheTag::new(self.val)
+    }
+
+    pub fn line(self) -> usize {
+        DCacheLine::new(self.val).line()
+    }
+
+    pub fn offset(self) -> usize {
+        (self.val & 0xf) as usize
+    }
+
+    pub fn value(self) -> u32 {
+        self.val
+    }
+}
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
 pub enum ICacheState {
@@ -53,9 +137,6 @@ pub enum ICacheState {
 pub struct ICache {
     tag: [CacheTag; 512],
     data: [[u32; 8]; 512],
-    pub state: ICacheState,
-    /// The last uncached read
-    uncached_read: (u32, CacheTag),
 }
 
 impl ICache {
@@ -63,42 +144,26 @@ impl ICache {
         ICache {
             tag: [CacheTag::invalid(); 512],
             data: [[0; 8]; 512],
-            state: ICacheState::Normal,
-            uncached_read: (0, CacheTag::invalid()),
         }
     }
     pub fn fetch(&mut self, va: u64) -> (u32, CacheTag) {
-        if va & 0xe000_0000 == 0xa000_0000 { // uncached via kseg1
-            // We just return the last uncached read
-            return self.uncached_read;
-        }
-        let word = va & 0x3;
-        let line = (va >> 2) & 0x1ff;
+        let addr = ICacheAddress::new(va as u32);
 
         return (
-            self.data[line as usize][word as usize],
-            self.tag[line as usize],
+            self.data[addr.line()][addr.offset()],
+            self.tag[addr.line()],
         );
     }
 
-    pub fn finish_uncached_read(&mut self, data: u32, addr: u32) {
-        self.uncached_read = (data, CacheTag::new_uncached(addr));
-        self.state = ICacheState::Refilled;
-    }
-
-    pub fn finish_fill(&mut self, data: [u32; 8], addr: u32) {
-        let line = (addr >> 2) & 0x1ff;
-        self.data[line as usize] = data;
-        self.tag[line as usize] = CacheTag::new(addr);
-        self.state = ICacheState::Refilled;
+    pub fn finish_fill(&mut self, line: usize, tag: CacheTag, data: [u32; 8]) {
+        self.data[line] = data;
+        self.tag[line] = tag;
     }
 }
 
 pub struct DCache {
     data: [[u8; 16]; 512],
     tag: [CacheTag; 512],
-    /// The last uncached read
-    uncached_read: (u32, CacheTag),
 }
 
 impl DCache {
@@ -106,7 +171,6 @@ impl DCache {
         DCache {
             data: [[0; 16]; 512],
             tag: [CacheTag::invalid(); 512],
-            uncached_read: (0, CacheTag::invalid()),
         }
     }
     pub fn open(&mut self, addr: u64) -> DataCacheAttempt {
@@ -140,10 +204,14 @@ impl DataCacheAttempt {
         self.tag == tlb_tag && self.tag.is_valid()
     }
 
-    pub fn do_miss(self, dcache: &DCache, tlb_tag: CacheTag) -> MemoryReq {
+    pub fn do_miss(self, dcache: &DCache, tlb_tag: CacheTag, size: u8) -> MemoryReq {
         let line = self.line as u32;
-        let physical_address = tlb_tag.tag() | line;
-        if self.tag.is_dirty() {
+        let physical_address = tlb_tag.tag() | ((line << 4) & 0xfff);
+
+        if tlb_tag.is_uncached() {
+            let full_physical_address = physical_address | self.offset as u32;
+            MemoryReq::UncachedDataRead(full_physical_address, size)
+        } else if self.tag.is_dirty() {
             let flush_physical_address = self.tag.tag() | line;
             MemoryReq::DCacheReplace(
                 physical_address,
@@ -173,6 +241,12 @@ impl DataCacheAttempt {
         }
 
         return u64::from_le_bytes(data_bytes);
+    }
+
+    pub fn finish_fill(&mut self, dcache: &mut DCache, new_tag: CacheTag, data: [u8; 16]) {
+        self.tag = new_tag;
+        dcache.data[self.line as usize] = data;
+        dcache.tag[self.line as usize] = new_tag;
     }
 
 }

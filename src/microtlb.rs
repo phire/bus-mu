@@ -1,4 +1,4 @@
-use crate::cache::CacheTag;
+use crate::cache::{CacheTag, ICacheAddress};
 
 
 struct TlbEntry {
@@ -91,4 +91,20 @@ impl ITlb {
 
     //     todo!("TLB miss")
     // }
+}
+
+pub struct TlbLookup {
+    addr: ICacheAddress,
+}
+
+impl TlbLookup {
+    pub fn new(addr: ICacheAddress) -> TlbLookup {
+        TlbLookup {
+            addr,
+        }
+    }
+
+    pub fn matches(self, tag: CacheTag) -> bool {
+        todo!()
+    }
 }

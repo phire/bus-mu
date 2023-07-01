@@ -7,7 +7,7 @@ use crate::{
         RType,
         ExMode,
         CmpMode
-    }, DCache, cache::{CacheTag, DataCacheAttempt, ICache, ICacheState}, microtlb::ITlb, regfile::RegFile
+    }, DCache, cache::{CacheTag, DataCacheAttempt, ICache}, microtlb::ITlb, regfile::RegFile
 };
 
 struct InstructionCache {
@@ -25,6 +25,7 @@ struct RegisterFile {
     ex_mode: ExMode,
     cmp_mode: CmpMode,
     store: bool,
+    stalled: bool,
 }
 
 struct Execute {
@@ -63,6 +64,13 @@ pub enum MemoryReq
     UncachedInstructionRead(u32),
     UncachedDataRead(u32, u8),
     UncachedDataWrite(u32, u8, u64),
+}
+
+pub enum MemoryResponce
+{
+    ICacheFill([u32; 8]),
+    DCacheFill([u8; 16]),
+    UncachedInstructionRead(u32),
 }
 
 pub enum ExitReason
@@ -119,7 +127,7 @@ impl Pipeline {
                         writeback_value = cache_attempt.read(&dcache, mem_size);
                     }
                 } else {
-                    return ExitReason::Mem(cache_attempt.do_miss(&dcache, tlb_tag));
+                    return ExitReason::Mem(cache_attempt.do_miss(&dcache, tlb_tag, self.dc.mem_size));
                 }
             }
 
@@ -152,16 +160,16 @@ impl Pipeline {
         // ================
         // Stage 3: Execute
         // ================
+        if self.rf.stalled {
+            self.ex.mem_size = 0;
+            return ExitReason::Ok;
+        }
         Self::run_ex_phase1(&self.rf, &mut self.ex, &mut regfile.hilo);
 
         // ======================
         // Stage 2: Register File
         // ======================
         {
-            // NULL outputs
-            self.rf.ex_mode = ExMode::Add32;
-            self.rf.write_back = 0;
-
             // First we check the result of the Instruction Cache stage
             // ICache always returns an instruction, but it might be the wrong one
             // The only way to know is to check the output of ITLB matches the tag ICache returned
@@ -175,27 +183,25 @@ impl Pipeline {
                 }
                 //return ExitReason::Ok;
             } else if self.ic.cache_tag != self.ic.expected_tag {
-                if icache.state == ICacheState::Normal {
-                    // ICache missed. We need to do a cache line fill
-                    icache.state = ICacheState::Filling;
-                    if self.ic.expected_tag.is_uncached() {
-                        // Do an uncached instruction fetch
-                        return ExitReason::Mem(
-                            MemoryReq::UncachedInstructionRead(self.ic.expected_tag.get_uncached()));
+                self.rf.stalled = true;
+                if self.ic.expected_tag.is_uncached() {
+                    let lower_bits = (self.rf.next_pc as u32) & 0xfff;
+                    // Do an uncached instruction fetch
+                    return ExitReason::Mem(
+                        MemoryReq::UncachedInstructionRead(self.ic.expected_tag.tag() | lower_bits));
 
-                    } else {
-                        let cache_line = (self.rf.next_pc as u32) & 0x0000_3fe0;
-                        let physical_address = self.ic.expected_tag.tag() | cache_line;
-                        return ExitReason::Mem(
-                            MemoryReq::ICacheFill(physical_address)
-                        );
-                    }
+                } else {
+                    let cache_line = (self.rf.next_pc as u32) & 0x0000_3fe0;
+                    let physical_address = self.ic.expected_tag.tag() | cache_line;
+                    return ExitReason::Mem(
+                        MemoryReq::ICacheFill(physical_address)
+                    );
                 }
             } else {
                 // ICache hit. We can continue with the rest of this stage
                 self.rf.next_pc = self.rf.next_pc + 4;
                 if !self.ex.skip_next {
-                    Self::run_regfile(&self.ic, &mut self.rf, &regfile);
+                    Self::run_regfile(self.ic.cache_data, &mut self.rf, &regfile);
                 }
             }
         }
@@ -203,19 +209,14 @@ impl Pipeline {
         // ==========================
         // Stage 1: Instruction Cache
         // ==========================
-        if icache.state != ICacheState::Filling {
-            if icache.state == ICacheState::Refilled {
-                icache.state = ICacheState::Normal;
-            }
-            (self.ic.cache_data, self.ic.cache_tag) = icache.fetch(self.rf.next_pc);
-            self.ic.expected_tag = itlb.translate(self.rf.next_pc);
-        }
+        (self.ic.cache_data, self.ic.cache_tag) = icache.fetch(self.rf.next_pc);
+        self.ic.expected_tag = itlb.translate(self.rf.next_pc);
 
         return ExitReason::Ok;
     }
 
-    fn run_regfile(ic: &InstructionCache, rf: &mut RegisterFile, regfile: &RegFile) {
-        let (inst, inst_info) = crate::instructions::decode(ic.cache_data);
+    fn run_regfile(instruction_word: u32, rf: &mut RegisterFile, regfile: &RegFile) {
+        let (inst, inst_info) = crate::instructions::decode(instruction_word);
         let j: JType = inst.into();
         let i: IType = inst.into();
         let r: RType = inst.into();
@@ -525,6 +526,32 @@ impl Pipeline {
         }
     }
 
+    pub fn memory_responce(&mut self, info: MemoryResponce, icache: &mut ICache,
+        dcache: &mut DCache) {
+        match info {
+            MemoryResponce::ICacheFill(data) => {
+                // Reconstruct line/offset from program counter
+                let line = (self.pc() as usize >> 5) & 0x1ff;
+                let offset = (self.pc() as usize) & 0x1f;
+                let new_tag = self.ic.expected_tag;
+
+                icache.finish_fill(line, new_tag, data);
+
+                self.ic.cache_data = data[offset];
+                self.ic.cache_tag = new_tag;
+                self.rf.stalled = false;
+            }
+            MemoryResponce::UncachedInstructionRead(word) => {
+                self.ic.cache_data = word;
+                self.ic.cache_tag = self.ic.expected_tag;
+                self.rf.stalled = false;
+            }
+            MemoryResponce::DCacheFill(data) => {
+                self.dc.cache_attempt.finish_fill(dcache, self.dc.tlb_tag, data);
+            }
+        }
+    }
+
 }
 
 pub fn create() -> Pipeline {
@@ -543,6 +570,7 @@ pub fn create() -> Pipeline {
             ex_mode: ExMode::Add32,
             cmp_mode: CmpMode::Eq,
             store: false,
+            stalled: false,
         },
         ex: Execute{
             next_pc: 0,
