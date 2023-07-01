@@ -399,9 +399,10 @@ pub enum RfMode {
     ImmUnsigned,
     StoreOp,
     RegReg,
-    MulDiv,
-    ShiftImm,
-    ShiftImm32,
+    RegRegNoWrite,
+    SmallImm,
+    SmallImmOffset32,
+    SmallImmNoWrite,
     RfUnimplemented,
 }
 
@@ -552,10 +553,10 @@ const fn build_special_table() -> [InstructionInfo; 64] {
 
     [
         // 0
-        Op("SLL", 0, Form::ShiftImm(0x0), ShiftImm, ShiftLeft32),
+        Op("SLL", 0, Form::ShiftImm(0x0), SmallImm, ShiftLeft32),
         Reserved,
-        Op("SRL", 0, Form::ShiftImm(0x2), ShiftImm, ShiftRight32),
-        Op("SRA", 0, Form::ShiftImm(0x3), ShiftImm, ShiftRightArith32),
+        Op("SRL", 0, Form::ShiftImm(0x2), SmallImm, ShiftRight32),
+        Op("SRA", 0, Form::ShiftImm(0x3), SmallImm, ShiftRightArith32),
         Op("SLLV", 0, Form::ShiftReg(0x4), RegReg, ShiftLeft32),
         Reserved,
         Op("SRLV", 0, Form::ShiftReg(0x6), RegReg, ShiftRight32),
@@ -579,14 +580,14 @@ const fn build_special_table() -> [InstructionInfo; 64] {
         Op("DSRLV", 0, Form::ShiftReg(0x16), RegReg, ShiftRight64),
         Op("DSRAV", 0, Form::ShiftReg(0x17), RegReg, ShiftRightArith64),
         // 3
-        Op("MULT", 0, Form::MulDiv(0x18), MulDiv, Mul32),
-        Op("MULTU", 0, Form::MulDiv(0x19), MulDiv, MulU32),
-        Op("DIV", 0, Form::MulDiv(0x1a), MulDiv, Div32),
-        Op("DIVU", 0, Form::MulDiv(0x1b), MulDiv, DivU32),
-        Op("DMULT", 0, Form::MulDiv(0x1c), MulDiv, Mul64),
-        Op("DMULTU", 0, Form::MulDiv(0x1d), MulDiv, MulU64),
-        Op("DDIV", 0, Form::MulDiv(0x1e),  MulDiv, Div64),
-        Op("DDIVU", 0, Form::MulDiv(0x1f), MulDiv, DivU64),
+        Op("MULT", 0, Form::MulDiv(0x18), RegRegNoWrite, Mul32),
+        Op("MULTU", 0, Form::MulDiv(0x19), RegRegNoWrite, MulU32),
+        Op("DIV", 0, Form::MulDiv(0x1a), RegRegNoWrite, Div32),
+        Op("DIVU", 0, Form::MulDiv(0x1b), RegRegNoWrite, DivU32),
+        Op("DMULT", 0, Form::MulDiv(0x1c), RegRegNoWrite, Mul64),
+        Op("DMULTU", 0, Form::MulDiv(0x1d), RegRegNoWrite, MulU64),
+        Op("DDIV", 0, Form::MulDiv(0x1e),  RegRegNoWrite, Div64),
+        Op("DDIVU", 0, Form::MulDiv(0x1f), RegRegNoWrite, DivU64),
         // 4
         Op("ADD", 0, Form::RegRegReg(0x20), RegReg, Add32),
         Op("ADDU", 0, Form::RegRegReg(0x21), RegReg, AddU32),
@@ -616,14 +617,14 @@ const fn build_special_table() -> [InstructionInfo; 64] {
         Unimplemented("TNE", 0), // Form::TrapRegReg(0x36), 0),
         Reserved,
         // 7
-        Op("DSLL", 0, Form::ShiftImm(0x38), ShiftImm, ShiftLeft64),
+        Op("DSLL", 0, Form::ShiftImm(0x38), SmallImm, ShiftLeft64),
         Reserved,
-        Op("DSRL", 0, Form::ShiftImm(0x3a), ShiftImm, ShiftRight64),
-        Op("DSRA", 0, Form::ShiftImm(0x3b), ShiftImm, ShiftRightArith64),
-        Op("DSLL32", 0, Form::ShiftImm(0x3c), ShiftImm32, ShiftLeft64),
+        Op("DSRL", 0, Form::ShiftImm(0x3a), SmallImm, ShiftRight64),
+        Op("DSRA", 0, Form::ShiftImm(0x3b), SmallImm, ShiftRightArith64),
+        Op("DSLL32", 0, Form::ShiftImm(0x3c), SmallImmOffset32, ShiftLeft64),
         Reserved,
-        Op("DSRL32", 0, Form::ShiftImm(0x3e), ShiftImm32, ShiftRight64),
-        Op("DSRA32", 0, Form::ShiftImm(0x3f), ShiftImm32, ShiftRightArith64),
+        Op("DSRL32", 0, Form::ShiftImm(0x3e), SmallImmOffset32, ShiftRight64),
+        Op("DSRA32", 0, Form::ShiftImm(0x3f), SmallImmOffset32, ShiftRightArith64),
     ]
 }
 
@@ -678,7 +679,7 @@ const fn build_cop0_table() -> [InstructionInfo; 16] {
         Unimplemented("DMFC0", 0x1),
         Unimplemented("CFC0", 0x2),
         Reserved,
-        Op("MTC0", 0x4, Form::CopReg, RfMode::RfUnimplemented, ExMode::ExUnimplemented),
+        Op("MTC0", 0x4, Form::CopReg, RfMode::SmallImmNoWrite, ExMode::ExUnimplemented),
         Unimplemented("DMTC0", 0x5),
         Unimplemented("CTC0", 0x6),
         Reserved,

@@ -55,45 +55,6 @@ pub struct Pipeline {
     //wb: WriteBack,
 }
 
-pub fn create() -> Pipeline {
-    Pipeline{
-        ic: InstructionCache{
-            cache_data: 0,
-            cache_tag: CacheTag::empty(),
-            expected_tag: CacheTag::empty(),
-        },
-        rf: RegisterFile{
-            next_pc: 0xffff_ffff_bfc0_0000,
-            alu_a: 0,
-            alu_b: 0,
-            temp: 0,
-            write_back: 0,
-            ex_mode: ExMode::Add32,
-            cmp_mode: CmpMode::Eq,
-            store: false,
-        },
-        ex: Execute{
-            next_pc: 0,
-            alu_out: 0,
-            addr: 0,
-            skip_next: false,
-            mem_size: 0,
-            store: false,
-            trap: false,
-            writeback_reg: 0,
-        },
-        dc: DataCache{
-            cache_attempt: DataCacheAttempt::empty(),
-            tlb_tag: CacheTag::empty(),
-            writeback_reg: 0,
-            alu_out: 0,
-            store: false,
-            mem_size: 0,
-        },
-        //wb: WriteBack{},
-    }
-}
-
 pub enum MemoryReq
 {
     ICacheFill(u32),
@@ -124,6 +85,9 @@ impl Pipeline {
         }
     }
 
+    pub fn pc(&self) -> u64 {
+        self.rf.next_pc
+    }
 
     pub fn cycle(
         &mut self,
@@ -176,7 +140,7 @@ impl Pipeline {
 
                 self.dc.cache_attempt = dcache.open(addr);
                 // TODO: Implement TLB lookups
-                self.dc.tlb_tag = CacheTag::new((addr as u32) & 0x1fff_ffff);
+                self.dc.tlb_tag = CacheTag::new_uncached((addr as u32) & 0x1fff_ffff);
 
                 // Forward from EX
                 self.dc.alu_out = self.ex.alu_out;
@@ -229,7 +193,7 @@ impl Pipeline {
                 }
             } else {
                 // ICache hit. We can continue with the rest of this stage
-                self.rf.next_pc = self.ex.next_pc + 4;
+                self.rf.next_pc = self.rf.next_pc + 4;
                 if !self.ex.skip_next {
                     Self::run_regfile(&self.ic, &mut self.rf, &regfile);
                 }
@@ -259,6 +223,7 @@ impl Pipeline {
         if let InstructionInfo::Op(_, _, _, rf_mode, ex_mode) = *inst_info {
             rf.ex_mode = ex_mode;
             match rf_mode {
+                // PERF: Maybe this can be simplified down to just a few flags
                 RfMode::JumpImm => {
                     let upper_bits = rf.next_pc & 0xffff_ffff_f000_0000;
                     rf.temp = (j.target() as u64) << 2 | upper_bits;
@@ -321,23 +286,28 @@ impl Pipeline {
                     rf.alu_b = regfile.read(r.rt());
                     rf.write_back = r.rd();
                 }
-                RfMode::MulDiv => {
+                RfMode::RegRegNoWrite => {
                     rf.alu_a = regfile.read(r.rs());
                     rf.alu_b = regfile.read(r.rt());
                     rf.write_back = 0;
                 }
-                RfMode::ShiftImm => {
+                RfMode::SmallImm => {
                     rf.alu_a = r.rs() as u64;
                     rf.alu_b = regfile.read(r.rt());
                     rf.write_back = r.rd();
                 }
-                RfMode::ShiftImm32 => {
+                RfMode::SmallImmOffset32 => {
                     rf.alu_a = r.rs() as u64 + 32;
                     rf.alu_b = regfile.read(r.rt());
                     rf.write_back = r.rd();
                 }
+                RfMode::SmallImmNoWrite => {
+                    rf.alu_a = r.rs() as u64;
+                    rf.alu_b = regfile.read(r.rt());
+                    rf.write_back = 0;
+                }
                 RfMode::RfUnimplemented => {
-                    todo!("Implement")
+                    println!("Unimplemented Rfmode");
                 }
             }
         } else {
@@ -549,8 +519,49 @@ impl Pipeline {
             ExMode::MemLeft(_) => todo!(),
             ExMode::MemRight(_) => todo!(),
             ExMode::MemLinked(_) => todo!(),
-            ExMode::ExUnimplemented => todo!()
+            ExMode::ExUnimplemented => {
+                println!("Unimplemented Exmode");
+            }
         }
     }
 
+}
+
+pub fn create() -> Pipeline {
+    Pipeline{
+        ic: InstructionCache{
+            cache_data: 0,
+            cache_tag: CacheTag::empty(),
+            expected_tag: CacheTag::empty(),
+        },
+        rf: RegisterFile{
+            next_pc: 0xffff_ffff_bfc0_0000,
+            alu_a: 0,
+            alu_b: 0,
+            temp: 0,
+            write_back: 0,
+            ex_mode: ExMode::Add32,
+            cmp_mode: CmpMode::Eq,
+            store: false,
+        },
+        ex: Execute{
+            next_pc: 0,
+            alu_out: 0,
+            addr: 0,
+            skip_next: false,
+            mem_size: 0,
+            store: false,
+            trap: false,
+            writeback_reg: 0,
+        },
+        dc: DataCache{
+            cache_attempt: DataCacheAttempt::empty(),
+            tlb_tag: CacheTag::empty(),
+            writeback_reg: 0,
+            alu_out: 0,
+            store: false,
+            mem_size: 0,
+        },
+        //wb: WriteBack{},
+    }
 }

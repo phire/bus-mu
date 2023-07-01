@@ -23,7 +23,7 @@ fn main() {
     let mut regfile = RegFile::new();
 
     for i in 0..64 {
-        println!("    cycle {:3}:", i);
+        println!("    cycle: {:3}, PC:{:08x}", i, pipeline.pc());
         let reason = pipeline.cycle(&mut icache, &mut dcache, &mut itlb, &mut regfile);
 
         match reason {
