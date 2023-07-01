@@ -280,7 +280,7 @@ impl Pipeline {
                     rf.alu_a = regfile.read(i.rs());
                     rf.alu_b = regfile.read(i.rt());
                     let offset = (i.imm() as i16 as u64) << 2;
-                    rf.temp = rf.next_pc + offset;
+                    rf.temp = rf.next_pc.wrapping_add(offset);
                     rf.writeback_reg = 0;
                 }
                 RfMode::BranchLinkImm => {
@@ -554,7 +554,7 @@ impl Pipeline {
     }
 
     pub fn memory_responce(&mut self, info: MemoryResponce, icache: &mut ICache,
-        dcache: &mut DCache) {
+        dcache: &mut DCache, regfile: &mut RegFile) {
         match info {
             MemoryResponce::ICacheFill(data) => {
                 // Reconstruct line/offset from program counter
@@ -575,6 +575,17 @@ impl Pipeline {
             }
             MemoryResponce::DCacheFill(data) => {
                 self.dc.cache_attempt.finish_fill(dcache, self.dc.tlb_tag, data);
+            }
+            MemoryResponce::UncachedDataRead(value) => {
+                if self.dc.writeback_reg != 0 {
+                    // TODO: truncate to 32 bits if we are in 32bit mode
+                    regfile.write(self.dc.writeback_reg, value);
+                    self.dc.writeback_reg = 0;
+                }
+                self.dc.mem_size = 0;
+            }
+            MemoryResponce::UncachedDataWrite => {
+                // Do nothing
             }
         }
     }

@@ -47,12 +47,25 @@ fn main() {
                 };
 
                 let (inst, _inst_info) = instructions::decode(word);
-                pipeline.memory_responce(pipeline::MemoryResponce::UncachedInstructionRead(word), &mut icache, &mut dcache);
+                pipeline.memory_responce(pipeline::MemoryResponce::UncachedInstructionRead(word), &mut icache, &mut dcache, &mut regfile);
                 println!("(uncached) {:04x}: {:08x}    {}", addr, word, inst.disassemble(addr as u64));
                 continue;
             }
             ExitReason::Mem(MemoryReq::UncachedDataRead(addr, size)) => {
-                println!("Uncached read: {:08x} ({} bytes)", addr, size);
+                println!("Uncached read: {:#08x} ({} bytes)", addr, size);
+                let mut data = 0;
+                match addr {
+                    0x04040010 => { // SP Status
+                        if i < 40 {
+                            data = 0; // Busy
+                        } else {
+                            data = 1; // Idle
+                        }
+                    }
+                    _ => { todo!(); }
+                }
+                pipeline.memory_responce(pipeline::MemoryResponce::UncachedDataRead(data), &mut icache, &mut dcache, &mut regfile);
+                continue;
             }
             ExitReason::Mem(MemoryReq::UncachedDataWrite(addr, size, data)) => {
                 println!("Uncached write: {:08x} ({} bytes) = {:08x}", addr, size, data);
