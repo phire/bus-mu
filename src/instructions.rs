@@ -361,7 +361,6 @@ pub enum InstructionInfo {
     Op(&'static str, u8, Form, RfMode, ExMode),
     Unimplemented(&'static str, u8),
     CopOp(u8),
-    CopFn,
 }
 
 impl InstructionInfo {
@@ -372,7 +371,6 @@ impl InstructionInfo {
             InstructionInfo::RegImm => "RegImm",
             InstructionInfo::Op(name, _, _, _, _) => name,
             InstructionInfo::CopOp(_) => "CopOp",
-            InstructionInfo::CopFn => "CopFn",
             InstructionInfo::Unimplemented(name, _) => name,
         }
     }
@@ -383,7 +381,6 @@ impl InstructionInfo {
             InstructionInfo::RegImm => None,
             InstructionInfo::Op(_, _, form, _, _) => Some(form),
             InstructionInfo::CopOp(_) => None,
-            InstructionInfo::CopFn => None,
             InstructionInfo::Unimplemented(_, _) => None,
         }
     }

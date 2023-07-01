@@ -1,5 +1,4 @@
 use crate::{
-    CacheTag, ICache, ITlb, RegFile,
     instructions::{
         InstructionInfo,
         IType,
@@ -8,7 +7,7 @@ use crate::{
         RType,
         ExMode,
         CmpMode
-    }, DCache, DataCacheAttempt, ICacheState
+    }, DCache, cache::{CacheTag, DataCacheAttempt, ICache, ICacheState}, microtlb::ITlb, regfile::RegFile
 };
 
 struct InstructionCache {
