@@ -80,6 +80,18 @@ impl ICache {
             self.tag[line as usize],
         );
     }
+
+    pub fn finish_uncached_read(&mut self, data: u32, addr: u32) {
+        self.uncached_read = (data, CacheTag::new_uncached(addr));
+        self.state = ICacheState::Refilled;
+    }
+
+    pub fn finish_fill(&mut self, data: [u32; 8], addr: u32) {
+        let line = (addr >> 2) & 0x1ff;
+        self.data[line as usize] = data;
+        self.tag[line as usize] = CacheTag::new(addr);
+        self.state = ICacheState::Refilled;
+    }
 }
 
 pub struct DCache {

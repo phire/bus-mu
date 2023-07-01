@@ -194,6 +194,10 @@ impl Pipeline {
         // Stage 2: Register File
         // ======================
         {
+            // NULL outputs
+            self.rf.ex_mode = ExMode::Add32;
+            self.rf.write_back = 0;
+
             // First we check the result of the Instruction Cache stage
             // ICache always returns an instruction, but it might be the wrong one
             // The only way to know is to check the output of ITLB matches the tag ICache returned
@@ -213,7 +217,7 @@ impl Pipeline {
                     if self.ic.expected_tag.is_uncached() {
                         // Do an uncached instruction fetch
                         return ExitReason::Mem(
-                            MemoryReq::UncachedInstructionRead(self.rf.next_pc as u32));
+                            MemoryReq::UncachedInstructionRead(self.ic.expected_tag.get_uncached()));
 
                     } else {
                         let cache_line = (self.rf.next_pc as u32) & 0x0000_3fe0;
@@ -236,6 +240,9 @@ impl Pipeline {
         // Stage 1: Instruction Cache
         // ==========================
         if icache.state != ICacheState::Filling {
+            if icache.state == ICacheState::Refilled {
+                icache.state = ICacheState::Normal;
+            }
             (self.ic.cache_data, self.ic.cache_tag) = icache.fetch(self.rf.next_pc);
             self.ic.expected_tag = itlb.translate(self.rf.next_pc);
         }

@@ -37,7 +37,19 @@ fn main() {
                 println!("DCache replace: {:08x} -> {:08x}", old_addr, new_addr);
             }
             ExitReason::Mem(MemoryReq::UncachedInstructionRead(addr)) => {
-                println!("Uncached Instruction req: {:08x}", addr);
+                let word = match addr {
+                    0x1fc00000..=0x1fc007bf => {
+                        let offset = (addr - 0x1fc00000) as usize;
+                        let bytes = &pif_rom[offset..(offset + 4)];
+                        u32::from_be_bytes(bytes.try_into().unwrap())
+                    }
+                    _ => panic!("Invalid address: {:08x}", addr),
+                };
+
+                let (inst, _inst_info) = instructions::decode(word);
+                icache.finish_uncached_read(word, addr);
+                println!("(uncached) {:04x}: {:08x}    {}", addr, word, inst.disassemble(addr as u64));
+                continue;
             }
             ExitReason::Mem(MemoryReq::UncachedDataRead(addr, size)) => {
                 println!("Uncached read: {:08x} ({} bytes)", addr, size);
@@ -45,17 +57,9 @@ fn main() {
             ExitReason::Mem(MemoryReq::UncachedDataWrite(addr, size, data)) => {
                 println!("Uncached write: {:08x} ({} bytes) = {:08x}", addr, size, data);
             }
-            ExitReason::Ok => { continue;}
+            ExitReason::Ok => { continue; }
         }
 
         break;
-
-        // let addr = i * 4;
-        // let bytes = &pif_rom[addr..(addr + 4)];
-        // let word = u32::from_be_bytes(bytes.try_into().unwrap());
-        // let (inst, _inst_info) = instructions::decode(word);
-        // //println!("{:x?} ", inst);
-        // println!("{:04x}: {:08x}    {}", addr, word, inst.disassemble(addr as u64));
-        // //println!("{:?} ", _inst_info);
     }
 }
