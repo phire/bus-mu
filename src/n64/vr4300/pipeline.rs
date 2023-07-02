@@ -1,4 +1,4 @@
-use crate::{
+use super::{
     instructions::{
         InstructionInfo,
         IType,
@@ -245,7 +245,7 @@ impl Pipeline {
     }
 
     fn run_regfile(instruction_word: u32, rf: &mut RegisterFile, regfile: &mut RegFile) {
-        let (inst, inst_info) = crate::instructions::decode(instruction_word);
+        let (inst, inst_info) = super::instructions::decode(instruction_word);
         let j: JType = inst.into();
         let i: IType = inst.into();
         let r: RType = inst.into();

@@ -1,5 +1,5 @@
 use modular_bitfield::{bitfield, specifiers::*};
-use crate::coprocessor0::COP0_REG_NAMES;
+use super::coprocessor0::COP0_REG_NAMES;
 
 #[bitfield(bits = 32)]
 #[derive(Debug, Copy, Clone)]

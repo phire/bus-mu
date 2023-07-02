@@ -1,4 +1,4 @@
-use crate::cache::{CacheTag, ICacheAddress};
+use super::cache::{CacheTag, ICacheAddress};
 
 
 struct TlbEntry {

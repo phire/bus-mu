@@ -1,4 +1,4 @@
-use crate::instructions::MIPS_REG_NAMES;
+use super::instructions::MIPS_REG_NAMES;
 
 pub struct RegFile {
     regs: [u64; 32],

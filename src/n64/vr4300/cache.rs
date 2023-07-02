@@ -1,5 +1,4 @@
-use crate::pipeline::MemoryReq;
-
+use super::pipeline::MemoryReq;
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
 pub struct CacheTag {
