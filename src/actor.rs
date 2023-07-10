@@ -3,7 +3,7 @@
 use std::{marker::PhantomData};
 
 
-use crate::object_map::{ObjectMap, IdProvider, Handle};
+use crate::object_map::{ObjectMap, IdProvider};
 
 struct MessageA {}
 struct MessageB {}
@@ -63,21 +63,27 @@ impl<A, M> MessagePacketInner for MessagePacketImpl<A, M>
 
 pub struct MessagePacketChannel<M> {
     message: M,
-    channel: Handle<dyn IdProvider<ActorId>, dyn Handler<M>, ActorId>,
+    channel_fn: fn (map: &mut ObjectMap<dyn IdProvider<ActorId>, ActorId>, message: M) -> MessagePacket,
 }
 
 impl<M> MessagePacketInner for MessagePacketChannel<M>
 {
     fn execute(self: Box<Self>, map: &mut ObjectMap<dyn IdProvider<ActorId>, ActorId>) -> MessagePacket {
-        self.channel.get(map).recv(self.message)
+        (self.channel_fn)(map, self.message)
     }
 }
 
-
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-struct Time {
+pub struct Time {
     // TODO: allow lazy times
     cycles: u64
+}
+
+fn channel_fn<A, M>(map: &mut ObjectMap<dyn IdProvider<ActorId>, ActorId>, message: M) -> MessagePacket
+where A: IdProvider<ActorId> + Handler<M>,
+      M: 'static,
+{
+    map.get::<A>().recv(message)
 }
 
 struct Addr<Actor> {
@@ -102,20 +108,18 @@ impl<A> Addr<A> {
     }
 
     pub fn make_channel<M>(&self) -> Channel<M>
-    where //A : Handler<M>,
+    where A : Handler<M>,
           A: IdProvider<ActorId> + 'static,
           M: 'static,
     {
         Channel {
-            handle: Handle::<dyn IdProvider<ActorId>, A, ActorId>::new().cast::<dyn Handler<M>>(),
-            //message_type: PhantomData<*const M>
+            channel_fn: channel_fn::<A, M>,
         }
     }
 }
 
 pub struct Channel<M> {
-    handle: Handle<dyn IdProvider<ActorId>, dyn Handler<M>, ActorId>,
-    //message_type: PhantomData<*const M>
+    channel_fn: fn (map: &mut ObjectMap<dyn IdProvider<ActorId>, ActorId>, message: M) -> MessagePacket,
 }
 
 impl<M> Channel<M>
@@ -126,7 +130,7 @@ impl<M> Channel<M>
             inner: Some(Box::new(MessagePacketChannel::<M>
             {
                 message: message,
-                channel: self.handle,
+                channel_fn: self.channel_fn,
             })),
             time,
         }
@@ -209,13 +213,13 @@ impl Scheduler {
     pub fn run(&mut self) {
         let mut message = MessagePacket::no_message();
 
-        let addrA = Addr::<TestA> { actor_type: PhantomData::<*const TestA> };
-        let addrB = Addr::<TestB> { actor_type: PhantomData::<*const TestB> };
-        let chanA = addrA.make_channel::<MessageA>();
+        let addr_a = Addr::<TestA> { actor_type: PhantomData::<*const TestA> };
+        let _addr_a = Addr::<TestB> { actor_type: PhantomData::<*const TestB> };
+        let _chan_a = addr_a.make_channel::<MessageA>();
         //let chanA = addrA.make_channel::<MessageB>();
 
 
-        message = addrA.send(MessageA{}, Time { cycles: 0 });
+        message = addr_a.send(MessageA{}, Time { cycles: 0 });
 
         loop {
             match message {
