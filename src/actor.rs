@@ -1,56 +1,27 @@
 
 
 use std::{marker::PhantomData};
+use crate::object_map::{ObjectMap, Named, MakeNamed};
 
 
-use crate::object_map::{ObjectMap, IdProvider};
-use strum_macros::{EnumIter, EnumCount};
-
-struct MessageA {}
-struct MessageB {}
-struct MessageC {}
-
-#[derive(Copy, Clone, EnumIter, EnumCount)]
-enum ActorId {
-    TestA,
-    TestB,
+trait MessagePacketInner<Name>
+where Name: MakeNamed, [(); Name::COUNT]:,
+{
+    fn execute(self: Box<Self>, map: &mut ObjectMap<Name>) -> MessagePacket<Name>;
 }
 
-impl From<ActorId> for usize {
-    fn from(id: ActorId) -> usize {
-        id as usize
-    }
-}
-
-impl From<ActorId> for Box<dyn IdProvider<ActorId>> {
-    fn from(id: ActorId) -> Box<dyn IdProvider<ActorId>> {
-        // FIXME: This is very unsafe. If you accidentally return the wrong type, things will break.
-        //        Maybe we can fix with a macro?
-        match id {
-            ActorId::TestA => Box::new(TestA::default()),
-            ActorId::TestB => Box::new(TestB::default()),
-        }
-    }
-}
-
-//trait Message {}
-
-trait MessagePacketInner {
-    fn execute(self: Box<Self>, map: &mut ObjectMap<dyn IdProvider<ActorId>, ActorId>) -> MessagePacket;
-}
-
-trait Handler<M> {
-    fn recv(&mut self, message: M) -> MessagePacket;
+trait Handler<M, Name> where Self: Named<Name> {
+    fn recv(&mut self, message: M) -> MessagePacket<Name>;
 }
 
 
-pub struct MessagePacket {
-    inner: Option<Box<dyn MessagePacketInner>>,
+pub struct MessagePacket<Name> {
+    inner: Option<Box<dyn MessagePacketInner<Name>>>,
     time: Time,
 }
 
-impl MessagePacket {
-    pub fn no_message() -> MessagePacket {
+impl<Name> MessagePacket<Name> {
+    pub fn no_message() -> MessagePacket<Name> {
         MessagePacket {
             inner: None,
             time: Time {
@@ -60,27 +31,35 @@ impl MessagePacket {
     }
 }
 
-pub struct MessagePacketImpl<A, M> {
+pub struct MessagePacketImpl<A, M, Name> {
     message: M,
     type_id: PhantomData<*const A>,
+    name_type: PhantomData<*const Name>,
 }
 
-impl<A, M> MessagePacketInner for MessagePacketImpl<A, M>
-     where A: IdProvider<ActorId> + Handler<M>
+impl<A, M, Name> MessagePacketInner<Name> for MessagePacketImpl<A, M, Name>
+     where A: Handler<M, Name>, Name: MakeNamed, [(); Name::COUNT]:
 {
-    fn execute(self: Box<Self>, map: &mut ObjectMap<dyn IdProvider<ActorId>, ActorId>) -> MessagePacket {
+    fn execute(self: Box<Self>, map: &mut ObjectMap<Name>) -> MessagePacket<Name> {
         map.get::<A>().recv(self.message)
     }
 }
 
-pub struct MessagePacketChannel<M> {
+pub struct MessagePacketChannel<M, Name>
+where M: 'static,
+      Name: MakeNamed,
+      [(); Name::COUNT]:
+{
     message: M,
-    channel_fn: fn (map: &mut ObjectMap<dyn IdProvider<ActorId>, ActorId>, message: M) -> MessagePacket,
+    channel_fn: fn (map: &mut ObjectMap<Name>, message: M) -> MessagePacket<Name>,
 }
 
-impl<M> MessagePacketInner for MessagePacketChannel<M>
+impl<M, Name> MessagePacketInner<Name> for MessagePacketChannel<M, Name>
+        where M: 'static,
+            Name: MakeNamed,
+            [(); Name::COUNT]:
 {
-    fn execute(self: Box<Self>, map: &mut ObjectMap<dyn IdProvider<ActorId>, ActorId>) -> MessagePacket {
+    fn execute(self: Box<Self>, map: &mut ObjectMap<Name>) -> MessagePacket<Name> {
         (self.channel_fn)(map, self.message)
     }
 }
@@ -91,55 +70,64 @@ pub struct Time {
     cycles: u64
 }
 
-fn channel_fn<A, M>(map: &mut ObjectMap<dyn IdProvider<ActorId>, ActorId>, message: M) -> MessagePacket
-where A: IdProvider<ActorId> + Handler<M>,
+fn channel_fn<A, M, Name>(map: &mut ObjectMap<Name>, message: M) -> MessagePacket<Name>
+where A: Handler<M, Name>,
       M: 'static,
+      Name: MakeNamed,
+      [(); Name::COUNT]:
 {
     map.get::<A>().recv(message)
 }
 
-struct Addr<Actor> {
+struct Addr<Actor, Name> {
     actor_type: PhantomData<*const Actor>,
+    named_type: PhantomData<*const Name>,
 }
 
-impl<A> Addr<A> {
-    pub fn send<M>(&self, message: M, time: Time) -> MessagePacket
-    where A: Handler<M>,
+impl<A, Name> Addr<A, Name>
+ where Name: MakeNamed,
+[(); Name::COUNT]:
+{
+    pub fn send<M>(&self, message: M, time: Time) -> MessagePacket<Name>
+    where A: Handler<M, Name> + 'static,
           M: 'static,
-          A: IdProvider<ActorId> + 'static,
     {
         // TODO: Don't box messages
         MessagePacket {
-            inner: Some(Box::new(MessagePacketImpl::<A, M>
+            inner: Some(Box::new(MessagePacketImpl::<A, M, Name>
             {
                 message: message,
                 type_id: PhantomData::<*const A>,
+                name_type: PhantomData::<*const Name>,
             })),
             time,
         }
     }
 
-    pub fn make_channel<M>(&self) -> Channel<M>
-    where A : Handler<M>,
-          A: IdProvider<ActorId> + 'static,
+    pub fn make_channel<M>(&self) -> Channel<M, Name>
+    where A : Handler<M, Name> + 'static,
           M: 'static,
     {
         Channel {
-            channel_fn: channel_fn::<A, M>,
+            channel_fn: channel_fn::<A, M, Name>,
         }
     }
 }
 
-pub struct Channel<M> {
-    channel_fn: fn (map: &mut ObjectMap<dyn IdProvider<ActorId>, ActorId>, message: M) -> MessagePacket,
+pub struct Channel<M, Name> where Name: MakeNamed,
+[(); Name::COUNT]:
+{
+    channel_fn: fn (map: &mut ObjectMap<Name>, message: M) -> MessagePacket<Name>,
 }
 
-impl<M> Channel<M>
-    where M: 'static
+impl<M, Name> Channel<M, Name>
+    where M: 'static,
+    Name: MakeNamed,
+    [(); Name::COUNT] :
 {
-    pub fn send(&self, message: M, time: Time) -> MessagePacket {
+    pub fn send(&self, message: M, time: Time) -> MessagePacket<Name> {
         MessagePacket {
-            inner: Some(Box::new(MessagePacketChannel::<M>
+            inner: Some(Box::new(MessagePacketChannel::<M, Name>
             {
                 message: message,
                 channel_fn: self.channel_fn,
@@ -149,68 +137,23 @@ impl<M> Channel<M>
     }
 }
 
-pub trait Actor {
-    fn run(&mut self, max_cycles: u64) -> MessagePacket;
-}
 
-
-
-#[derive(Default)]
-struct TestA {
-    self_addr: Option<Addr<TestA>>,
-}
-
-impl Actor for TestA {
-    fn run(&mut self, max_cycles: u64) -> MessagePacket {
-        MessagePacket::no_message()
-    }
-}
-
-impl IdProvider<ActorId> for TestA {
-    fn id() -> ActorId {
-        ActorId::TestA
-    }
-}
-
-impl Handler<MessageA> for TestA {
-    fn recv(&mut self, message: MessageA) -> MessagePacket {
-        println!("TestA recv MessageA");
-        drop(message);
-        return MessagePacket::no_message();
-    }
-}
-
-#[derive(Default)]
-struct TestB {
-
-}
-
-impl Actor for TestB {
-    fn run(&mut self, max_cycles: u64) -> MessagePacket {
-        MessagePacket::no_message()
-    }
-}
-
-impl IdProvider<ActorId> for TestB {
-    //const ID: ActorId = ActorId::TestB;
-    fn id() -> ActorId {
-        ActorId::TestB
-    }
-}
-
-mod object_map {
-
-}
-
-trait ActorWithId : Actor + IdProvider<ActorId> {}
-
-pub struct Scheduler {
-    actors: ObjectMap<dyn IdProvider<ActorId>, ActorId>,
+pub struct Scheduler<ActorNames> where
+    ActorNames: MakeNamed,
+    usize: From<ActorNames>,
+    [(); ActorNames::COUNT]:
+{
+    actors: ObjectMap<ActorNames>,
     commited_time: Time,
 }
 
-impl Scheduler {
-    pub fn new() -> Scheduler {
+impl<ActorNames> Scheduler<ActorNames> where
+ActorNames: MakeNamed,
+    usize: From<ActorNames>,
+    ActorNames: MakeNamed,
+    [(); ActorNames::COUNT]:
+ {
+    pub fn new() -> Scheduler<ActorNames> {
         Scheduler {
             actors: ObjectMap::new(),
             commited_time: Time { cycles: 0 }
@@ -219,15 +162,6 @@ impl Scheduler {
 
     pub fn run(&mut self) {
         let mut message = MessagePacket::no_message();
-
-        let addr_a = Addr::<TestA> { actor_type: PhantomData::<*const TestA> };
-        let _addr_a = Addr::<TestB> { actor_type: PhantomData::<*const TestB> };
-        let _chan_a = addr_a.make_channel::<MessageA>();
-        //let chanA = addrA.make_channel::<MessageB>();
-
-
-        message = addr_a.send(MessageA{}, Time { cycles: 0 });
-
         loop {
             match message {
                 MessagePacket { inner: None, time: _ } => {
