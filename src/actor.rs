@@ -4,12 +4,13 @@ use std::{marker::PhantomData};
 
 
 use crate::object_map::{ObjectMap, IdProvider};
+use strum_macros::{EnumIter, EnumCount};
 
 struct MessageA {}
 struct MessageB {}
 struct MessageC {}
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, EnumIter, EnumCount)]
 enum ActorId {
     TestA,
     TestB,
@@ -18,6 +19,17 @@ enum ActorId {
 impl From<ActorId> for usize {
     fn from(id: ActorId) -> usize {
         id as usize
+    }
+}
+
+impl From<ActorId> for Box<dyn IdProvider<ActorId>> {
+    fn from(id: ActorId) -> Box<dyn IdProvider<ActorId>> {
+        // FIXME: This is very unsafe. If you accidentally return the wrong type, things will break.
+        //        Maybe we can fix with a macro?
+        match id {
+            ActorId::TestA => Box::new(TestA::default()),
+            ActorId::TestB => Box::new(TestB::default()),
+        }
     }
 }
 
@@ -200,12 +212,7 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new() -> Scheduler {
         Scheduler {
-            actors: crate::object_map::new(
-                [
-                    Box::new(TestA::default()),
-                    Box::new(TestB::default()),
-                ]
-            ),
+            actors: ObjectMap::new(),
             commited_time: Time { cycles: 0 }
         }
     }

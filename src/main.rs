@@ -1,4 +1,3 @@
-#![feature(variant_count)]
 #![feature(generic_const_exprs)]
 
 pub mod n64;
