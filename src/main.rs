@@ -4,6 +4,7 @@ pub mod n64;
 pub mod actor;
 pub mod object_map;
 
+use actor::Actor;
 use named_derive::Named;
 use object_map::{Named, MakeNamed};
 
@@ -14,13 +15,32 @@ struct ThingB;
 #[derive(Default)]
 struct ThingC;
 
+impl Actor<Test> for ThingA {
+    fn advance(&self, _limit: actor::Time) -> actor::MessagePacket<Test> {
+        todo!()
+    }
+}
+
+impl Actor<Test> for ThingB {
+    fn advance(&self, _limit: actor::Time) -> actor::MessagePacket<Test> {
+        todo!()
+    }
+}
+
+impl Actor<Test> for ThingC {
+    fn advance(&self, _limit: actor::Time) -> actor::MessagePacket<Test> {
+        todo!()
+    }
+}
+
 #[derive(Named, PartialEq, Eq, Copy, Clone, Debug)]
+#[named(base(Actor))]
 enum Test {
     #[named(class(ThingA))]
     A,
     #[named(class(ThingB))]
     B,
-     #[named(class(ThingC))]
+    #[named(class(ThingC))]
     C,
 }
 

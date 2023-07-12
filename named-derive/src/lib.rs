@@ -24,9 +24,10 @@ impl Variant {
 }
 
 #[derive(FromDeriveInput)]
-#[darling(supports(enum_unit))]
+#[darling(attributes(named), supports(enum_unit))]
 struct NamedEnum {
     data: Data<Variant, Ignored>,
+    base: PathList,
 }
 
 #[proc_macro_derive(Named, attributes(named))]
@@ -60,6 +61,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
     }
 
     let count = make_patterns.len();
+    let base = &named_enum.base[0];
 
     let output = quote! {
 
@@ -67,7 +69,8 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
 
         impl MakeNamed for #ident {
             const COUNT: usize = #count;
-            fn make(id: Self) -> Box<dyn Named<Self>> {
+            type Base = dyn #base<#ident>;
+            fn make(id: Self) -> Box<Self::Base> {
                 match id {
                     #(#make_patterns)*
                 }

@@ -1,13 +1,13 @@
 
 
-use std::{marker::PhantomData};
-use crate::object_map::{ObjectMap, Named, MakeNamed};
+use std::{marker::PhantomData, collections::BinaryHeap, cmp::Reverse};
+use crate::object_map::{ObjectStore, Named, MakeNamed, EnumMap};
 
 
 trait MessagePacketInner<Name>
 where Name: MakeNamed, [(); Name::COUNT]:,
 {
-    fn execute(self: Box<Self>, map: &mut ObjectMap<Name>) -> MessagePacket<Name>;
+    fn execute(self: Box<Self>, map: &mut ObjectStore<Name>) -> MessagePacket<Name>;
 }
 
 trait Handler<M, Name> where Self: Named<Name> {
@@ -40,7 +40,7 @@ pub struct MessagePacketImpl<A, M, Name> {
 impl<A, M, Name> MessagePacketInner<Name> for MessagePacketImpl<A, M, Name>
      where A: Handler<M, Name>, Name: MakeNamed, [(); Name::COUNT]:
 {
-    fn execute(self: Box<Self>, map: &mut ObjectMap<Name>) -> MessagePacket<Name> {
+    fn execute(self: Box<Self>, map: &mut ObjectStore<Name>) -> MessagePacket<Name> {
         map.get::<A>().recv(self.message)
     }
 }
@@ -51,7 +51,7 @@ where M: 'static,
       [(); Name::COUNT]:
 {
     message: M,
-    channel_fn: fn (map: &mut ObjectMap<Name>, message: M) -> MessagePacket<Name>,
+    channel_fn: fn (map: &mut ObjectStore<Name>, message: M) -> MessagePacket<Name>,
 }
 
 impl<M, Name> MessagePacketInner<Name> for MessagePacketChannel<M, Name>
@@ -59,7 +59,7 @@ impl<M, Name> MessagePacketInner<Name> for MessagePacketChannel<M, Name>
             Name: MakeNamed,
             [(); Name::COUNT]:
 {
-    fn execute(self: Box<Self>, map: &mut ObjectMap<Name>) -> MessagePacket<Name> {
+    fn execute(self: Box<Self>, map: &mut ObjectStore<Name>) -> MessagePacket<Name> {
         (self.channel_fn)(map, self.message)
     }
 }
@@ -70,7 +70,15 @@ pub struct Time {
     cycles: u64
 }
 
-fn channel_fn<A, M, Name>(map: &mut ObjectMap<Name>, message: M) -> MessagePacket<Name>
+impl Default for Time {
+    fn default() -> Self {
+        Time {
+            cycles: 0,
+        }
+    }
+}
+
+fn channel_fn<A, M, Name>(map: &mut ObjectStore<Name>, message: M) -> MessagePacket<Name>
 where A: Handler<M, Name>,
       M: 'static,
       Name: MakeNamed,
@@ -117,7 +125,7 @@ impl<A, Name> Addr<A, Name>
 pub struct Channel<M, Name> where Name: MakeNamed,
 [(); Name::COUNT]:
 {
-    channel_fn: fn (map: &mut ObjectMap<Name>, message: M) -> MessagePacket<Name>,
+    channel_fn: fn (map: &mut ObjectStore<Name>, message: M) -> MessagePacket<Name>,
 }
 
 impl<M, Name> Channel<M, Name>
@@ -137,45 +145,96 @@ impl<M, Name> Channel<M, Name>
     }
 }
 
+struct Entry<ActorNames> {
+    time: Time,
+    actor: ActorNames,
+}
+
+impl<ActorNames> PartialEq for Entry<ActorNames> {
+    fn eq(&self, other: &Self) -> bool {
+        self.time == other.time
+    }
+}
+
+impl<ActorNames> Eq for Entry<ActorNames> {}
+
+impl<ActorNames> PartialOrd for Entry<ActorNames> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Reverse(self.time).partial_cmp(&Reverse(other.time))
+    }
+}
+
+impl <ActorNames> Ord for Entry<ActorNames> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        Reverse(self.time).cmp(&Reverse(other.time))
+    }
+}
 
 pub struct Scheduler<ActorNames> where
     ActorNames: MakeNamed,
     usize: From<ActorNames>,
     [(); ActorNames::COUNT]:
 {
-    actors: ObjectMap<ActorNames>,
-    commited_time: Time,
+    actors: ObjectStore<ActorNames>,
+    committed: EnumMap<Time, ActorNames>,
+    horizon: BinaryHeap<Entry<ActorNames>>,
+
+    min_commited_time: Time,
+}
+
+pub trait Actor<ActorNames> : Named<ActorNames> {
+    fn advance(&self, limit: Time) -> MessagePacket<ActorNames>;
 }
 
 impl<ActorNames> Scheduler<ActorNames> where
 ActorNames: MakeNamed,
     usize: From<ActorNames>,
-    ActorNames: MakeNamed,
+    <ActorNames as MakeNamed>::Base: Actor<ActorNames>,
     [(); ActorNames::COUNT]:
  {
     pub fn new() -> Scheduler<ActorNames> {
         Scheduler {
-            actors: ObjectMap::new(),
-            commited_time: Time { cycles: 0 }
+            actors: ObjectStore::new(),
+            committed: EnumMap::new(),
+            horizon: BinaryHeap::default(),
+            min_commited_time: Time::default(),
         }
     }
 
     pub fn run(&mut self) {
         let mut message = MessagePacket::no_message();
+
+        for actor in ActorNames::iter() {
+            self.horizon.push(Entry { time: Time::default(), actor });
+        }
+        assert!(ActorNames::COUNT > 0);
+
         loop {
             match message {
                 MessagePacket { inner: None, time: _ } => {
-                    // Find the actor with the smallest window and advance it's time
+                    // Find the actor with the smallest horizon, so we can advance it
+                    let next = self.horizon.pop().expect("Error: No actors?");
+
+                    // The next-smallest horizon is how far we can advance
+                    let limit = self.horizon.peek().expect("Error: No actors?");
+
+                    message = self.actors.get_id(next.actor).advance(limit.time);
                 }
                 MessagePacket { inner: Some(m), time } => {
                     match time {
-                        time if time == self.commited_time => {
+                        time if time == self.min_commited_time => {
                             // We have a message for the current time, deliver it
                             message = m.execute(&mut self.actors);
                         }
-                        time if time > self.commited_time => {
+                        time if time > self.min_commited_time => {
                             // We have a message for the future, we need to advance all actors to that time
-                            todo!();
+                            for actor in ActorNames::iter() {
+                                if self.committed[actor] < time {
+                                    let val = self.actors.get_id(actor).advance(time);
+                                    assert!(val.inner.is_none());
+                                }
+                            }
+                            message = m.execute(&mut self.actors);
                         }
                         _ => {
                             panic!("Message sent to the past")
