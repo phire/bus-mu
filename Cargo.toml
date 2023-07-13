@@ -10,5 +10,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-actors = { path = "actors" }
+actor_framework = { path = "actor_framework" }
 n64 = { path = "n64" }

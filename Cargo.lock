@@ -3,7 +3,7 @@
 version = 3
 
 [[package]]
-name = "actors"
+name = "actor_framework"
 version = "0.1.0"
 dependencies = [
  "named-derive",
@@ -13,7 +13,7 @@ dependencies = [
 name = "bus-mu"
 version = "0.1.0"
 dependencies = [
- "actors",
+ "actor_framework",
  "n64",
 ]
 
@@ -89,6 +89,7 @@ dependencies = [
 name = "n64"
 version = "0.1.0"
 dependencies = [
+ "actor_framework",
  "modular-bitfield",
 ]
 

@@ -1,5 +1,5 @@
 [package]
-name = "actors"
+name = "actor_framework"
 version.workspace = true
 edition = "2021"
 
