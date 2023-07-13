@@ -113,6 +113,7 @@ impl<T, E> EnumMap<T, E>
         }
     }
 
+    /// Returns the iter of this [`EnumMap<T, E>`].
     pub fn iter(&self) -> EnumMapIterator<T, E> {
         EnumMapIterator {
             pos: 0,

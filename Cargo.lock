@@ -3,11 +3,18 @@
 version = 3
 
 [[package]]
+name = "actors"
+version = "0.1.0"
+dependencies = [
+ "named-derive",
+]
+
+[[package]]
 name = "bus-mu"
 version = "0.1.0"
 dependencies = [
+ "actors",
  "modular-bitfield",
- "named-derive",
 ]
 
 [[package]]

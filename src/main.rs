@@ -1,12 +1,8 @@
-#![feature(generic_const_exprs)]
+
 
 pub mod n64;
-pub mod actor;
-pub mod object_map;
 
-use actor::Actor;
-use named_derive::Named;
-use object_map::{Named, MakeNamed};
+use actors::{Actor, Time, MessagePacket, Named};
 
 #[derive(Default)]
 struct ThingA;
@@ -16,19 +12,19 @@ struct ThingB;
 struct ThingC;
 
 impl Actor<Test> for ThingA {
-    fn advance(&self, _limit: actor::Time) -> actor::MessagePacket<Test> {
+    fn advance(&self, _limit: Time) -> MessagePacket<Test> {
         todo!()
     }
 }
 
 impl Actor<Test> for ThingB {
-    fn advance(&self, _limit: actor::Time) -> actor::MessagePacket<Test> {
+    fn advance(&self, _limit: Time) -> MessagePacket<Test> {
         todo!()
     }
 }
 
 impl Actor<Test> for ThingC {
-    fn advance(&self, _limit: actor::Time) -> actor::MessagePacket<Test> {
+    fn advance(&self, _limit: Time) -> MessagePacket<Test> {
         todo!()
     }
 }
@@ -47,7 +43,7 @@ enum Test {
 fn main() {
     //n64::vr4300::test();
     println!("Initializing Scheduler");
-    let mut scheduler = actor::Scheduler::<Test>::new();
+    let mut scheduler = actors::Scheduler::<Test>::new();
     println!("Starting Scheduler");
     scheduler.run();
 

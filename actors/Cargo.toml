@@ -1,0 +1,9 @@
+[package]
+name = "actors"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+
+[dependencies]
+named-derive = { version = "0.1.0", path = "named-derive" }

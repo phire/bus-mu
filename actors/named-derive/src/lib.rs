@@ -53,7 +53,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
         });
 
         classes.push(quote! {
-            impl Named<#ident> for #class_path {
+            impl actors::Named<#ident> for #class_path {
                 fn name() -> #ident { #ident::#name }
                 fn dyn_name(&self) -> #ident { #ident::#name }
             }
@@ -67,7 +67,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
 
         #(#classes)*
 
-        impl MakeNamed for #ident {
+        impl actors::MakeNamed for #ident {
             const COUNT: usize = #count;
             type Base = dyn #base<#ident>;
             fn make(id: Self) -> Box<Self::Base> {
@@ -92,8 +92,6 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
             }
         }
     };
-
-    println!("{}", output.to_string());
 
     output.into()
 }
