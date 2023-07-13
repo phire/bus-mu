@@ -14,7 +14,7 @@ name = "bus-mu"
 version = "0.1.0"
 dependencies = [
  "actors",
- "modular-bitfield",
+ "n64",
 ]
 
 [[package]]
@@ -82,7 +82,14 @@ checksum = "5a7d5f7076603ebc68de2dc6a650ec331a062a13abaa346975be747bbfa4b789"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.103",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "n64"
+version = "0.1.0"
+dependencies = [
+ "modular-bitfield",
 ]
 
 [[package]]
@@ -127,9 +134,9 @@ checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "syn"
-version = "1.0.103"
+version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a864042229133ada95abf3b54fdc62ef5ccabe9515b64717bcb9a1919e59445d"
+checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
 dependencies = [
  "proc-macro2",
  "quote",

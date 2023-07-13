@@ -1,9 +1,14 @@
+
+/// The VR4300 is the main CPU of the Nintendo 64.
+///
+/// It has an entire chip to itself, and is more-or-less an off-the-shelf part (it appears
+/// Nintendo did some customization at the packaging level: moving some pins around, disabling JTAG)
+
 use cache::{ICache, DCache};
 use microtlb::ITlb;
 use pipeline::{MemoryReq, ExitReason};
 use regfile::RegFile;
-
-use self::pipeline::Pipeline;
+use pipeline::Pipeline;
 
 pub mod instructions;
 pub mod pipeline;
@@ -79,3 +84,36 @@ pub fn test() {
     }
 }
 
+pub struct Core {
+    pipeline: Pipeline,
+    icache: ICache,
+    dcache: DCache,
+    itlb: ITlb,
+    regfile: RegFile,
+    //bus: SysADBus,
+}
+
+impl Core {
+    pub fn new() -> Core {
+        Core {
+            pipeline: pipeline::create(),
+            icache: ICache::new(),
+            dcache: DCache::new(),
+            itlb: ITlb::new(),
+            regfile: RegFile::new(),
+        }
+    }
+    pub fn run(&mut self, max_cycles: u64) {
+        for _ in 0..max_cycles {
+            let reason = self.pipeline.cycle(
+                &mut self.icache,
+                &mut self.dcache,
+                &mut self.itlb,
+                &mut self.regfile
+            );
+            // if reason != ExitReason::Ok {
+
+            // }
+        }
+    }
+}

@@ -1,12 +1,14 @@
+[workspace]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
 [package]
 name = "bus-mu"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-modular-bitfield = "0.11.2"
 actors = { path = "actors" }
-#strum = "0.25.0"
-#strum_macros = "0.25"
+n64 = { path = "n64" }

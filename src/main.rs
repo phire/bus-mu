@@ -1,7 +1,4 @@
 
-
-pub mod n64;
-
 use actors::{Actor, Time, MessagePacket, Named};
 
 #[derive(Default)]
