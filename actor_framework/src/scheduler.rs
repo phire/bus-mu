@@ -30,10 +30,11 @@ ActorNames: MakeNamed,
     }
 
     pub fn run(&mut self) {
-        let mut message = MessagePacket::no_message();
+        let mut message = MessagePacket::no_message(Time::default());
 
         for actor in ActorNames::iter() {
-            self.horizon.push(Entry { time: Time::default(), actor });
+            let time = self.actors.get_id(actor).horizon();
+            self.horizon.push(Entry { time, actor });
         }
         assert!(ActorNames::COUNT > 0);
 
@@ -46,13 +47,18 @@ ActorNames: MakeNamed,
                     // The next-smallest horizon is how far we can advance
                     let limit = self.horizon.peek().expect("Error: No actors?");
 
-                    message = self.actors.get_id(next.actor).advance(limit.time);
+                    let actor = self.actors.get_id(next.actor);
+
+                    message = actor.advance(limit.time);
+
+                    // update horizon
+                    self.horizon.push(Entry { time: actor.horizon(), actor: next.actor });
                 }
                 MessagePacket { inner: Some(m), time } => {
                     match time {
                         time if time == self.min_commited_time => {
                             // We have a message for the current time, deliver it
-                            message = m.execute(&mut self.actors);
+                            message = m.execute(&mut self.actors, time);
                         }
                         time if time > self.min_commited_time => {
                             // We have a message for the future, we need to advance all actors to that time
@@ -62,7 +68,7 @@ ActorNames: MakeNamed,
                                     assert!(val.inner.is_none());
                                 }
                             }
-                            message = m.execute(&mut self.actors);
+                            message = m.execute(&mut self.actors, time);
                         }
                         _ => {
                             panic!("Message sent to the past")
@@ -74,6 +80,7 @@ ActorNames: MakeNamed,
     }
 }
 
+#[derive(Debug)]
 struct Entry<ActorNames> {
     time: Time,
     actor: ActorNames,

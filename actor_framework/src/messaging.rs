@@ -1,12 +1,12 @@
 
 
 use std::marker::PhantomData;
-use crate::{object_map::{ObjectStore, MakeNamed}, Handler, Time};
+use crate::{object_map::{ObjectStore, MakeNamed}, Handler, Time, Named};
 
 pub(crate) trait MessagePacketInner<Name>
 where Name: MakeNamed, [(); Name::COUNT]:,
 {
-    fn execute(self: Box<Self>, map: &mut ObjectStore<Name>) -> MessagePacket<Name>;
+    fn execute(self: Box<Self>, map: &mut ObjectStore<Name>, time: Time) -> MessagePacket<Name>;
 }
 
 pub struct MessagePacket<Name> {
@@ -17,13 +17,15 @@ pub struct MessagePacket<Name> {
 impl<Name> MessagePacket<Name>
     where Name: MakeNamed, [(); Name::COUNT]:,
 {
-    pub fn no_message() -> MessagePacket<Name> {
+    pub fn no_message(time: Time) -> MessagePacket<Name> {
         MessagePacket {
             inner: None,
-            time: Time {
-                cycles: 0,
-            },
+            time,
         }
+    }
+
+    pub fn is_none(&self) -> bool {
+        self.inner.is_none()
     }
 }
 
@@ -36,8 +38,8 @@ pub struct MessagePacketImpl<A, M, Name> {
 impl<A, M, Name> MessagePacketInner<Name> for MessagePacketImpl<A, M, Name>
      where A: Handler<M, Name>, Name: MakeNamed, [(); Name::COUNT]:
 {
-    fn execute(self: Box<Self>, map: &mut ObjectStore<Name>) -> MessagePacket<Name> {
-        map.get::<A>().recv(self.message)
+    fn execute(self: Box<Self>, map: &mut ObjectStore<Name>, time: Time) -> MessagePacket<Name> {
+        map.get::<A>().recv(time, self.message)
     }
 }
 
@@ -47,7 +49,7 @@ where M: 'static,
       [(); Name::COUNT]:
 {
     message: M,
-    channel_fn: fn (map: &mut ObjectStore<Name>, message: M) -> MessagePacket<Name>,
+    channel_fn: fn (map: &mut ObjectStore<Name>, time: Time, message: M) -> MessagePacket<Name>,
 }
 
 impl<M, Name> MessagePacketInner<Name> for MessagePacketChannel<M, Name>
@@ -55,23 +57,32 @@ impl<M, Name> MessagePacketInner<Name> for MessagePacketChannel<M, Name>
             Name: MakeNamed,
             [(); Name::COUNT]:
 {
-    fn execute(self: Box<Self>, map: &mut ObjectStore<Name>) -> MessagePacket<Name> {
-        (self.channel_fn)(map, self.message)
+    fn execute(self: Box<Self>, map: &mut ObjectStore<Name>, time: Time) -> MessagePacket<Name> {
+        (self.channel_fn)(map, time, self.message)
     }
 }
 
-fn channel_fn<A, M, Name>(map: &mut ObjectStore<Name>, message: M) -> MessagePacket<Name>
+fn channel_fn<A, M, Name>(map: &mut ObjectStore<Name>, time: Time, message: M) -> MessagePacket<Name>
 where A: Handler<M, Name>,
       M: 'static,
       Name: MakeNamed,
       [(); Name::COUNT]:
 {
-    map.get::<A>().recv(message)
+    map.get::<A>().recv(time, message)
 }
 
-struct Addr<Actor, Name> {
+pub struct Addr<Actor, Name> {
     actor_type: PhantomData<*const Actor>,
     named_type: PhantomData<*const Name>,
+}
+
+impl<Actor, Name> Default for Addr<Actor, Name> {
+    fn default() -> Self {
+        Self {
+            actor_type: PhantomData::<*const Actor>,
+            named_type: PhantomData::<*const Name>,
+        }
+    }
 }
 
 impl<A, Name> Addr<A, Name>
@@ -104,11 +115,28 @@ impl<A, Name> Addr<A, Name>
     }
 }
 
+trait MakeAddr<Name> where Self: Sized, Name: MakeNamed, [(); Name::COUNT]: {
+    fn make_addr() -> Addr<Self, Name>;
+}
+
+impl<Name, A> MakeAddr<Name> for A where
+    Name: MakeNamed,
+    A: Named<Name>,
+    [(); Name::COUNT]:
+{
+    fn make_addr() -> Addr<Self, Name> {
+        Addr {
+            actor_type: PhantomData::<*const Self>,
+            named_type: PhantomData::<*const Name>,
+        }
+    }
+}
+
 pub struct Channel<M, Name>
     where Name: MakeNamed,
         [(); Name::COUNT]:
 {
-    channel_fn: fn (map: &mut ObjectStore<Name>, message: M) -> MessagePacket<Name>,
+    channel_fn: fn (map: &mut ObjectStore<Name>, time: Time, message: M) -> MessagePacket<Name>,
 }
 
 impl<M, Name> Channel<M, Name>
