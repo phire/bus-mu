@@ -1,17 +1,23 @@
 // FIXME: can we do it without this?
 #![feature(generic_const_exprs)]
 
-mod messaging;
+mod addr;
+mod channel;
+mod message_packet;
 mod scheduler;
 mod time;
+mod enum_map;
 mod object_map;
+mod named;
 
-pub use object_map::{Named, MakeNamed};
+pub use addr::Addr;
+pub use channel::Channel;
+pub use named::{Named, MakeNamed};
 pub use named_derive::Named;
 pub use time::Time;
-pub use messaging::{MessagePacket, Addr, Channel};
+pub use message_packet::MessagePacket;
 pub use scheduler::Scheduler;
-pub use object_map::EnumMap;
+pub use enum_map::EnumMap;
 
 pub trait Actor<ActorNames> : Named<ActorNames> {
     fn advance(&mut self, limit: Time) -> MessagePacket<ActorNames>;

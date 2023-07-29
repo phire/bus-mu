@@ -1,6 +1,6 @@
 use std::{collections::BinaryHeap, cmp::Reverse};
 
-use crate::{object_map::{ObjectStore, MakeNamed, EnumMap}, Time, Actor, messaging::MessagePacket};
+use crate::{object_map::ObjectStore, Time, Actor, message_packet::MessagePacket, MakeNamed, EnumMap};
 
 pub struct Scheduler<ActorNames> where
     ActorNames: MakeNamed,
