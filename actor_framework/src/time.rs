@@ -6,21 +6,37 @@ pub struct Time {
 }
 
 impl Time {
-    pub fn max() -> Self {
-        Time {
-            cycles: u64::MAX
-        }
-    }
+    pub const MAX: Self = Time {
+        cycles: u64::MAX
+    };
 
     pub fn is_resolved(&self) -> bool {
         // TODO: allow lazy times
         self.cycles != u64::MAX && self.cycles != 0
     }
 
-    pub fn add(&self, other: u64) -> Self {
+    pub fn add(self, other: u64) -> Self {
         Time {
             cycles: self.cycles + other
         }
+    }
+
+    pub fn lower_bound(&self) -> Self {
+        // TODO: once we have lazy times, this will be the minimum of the lazy time
+        Time {
+            cycles: self.cycles
+        }
+    }
+
+    pub fn take(&mut self) -> Self {
+        let time = *self;
+        *self = Time::default();
+        time
+    }
+
+    // Once we have lazy times, hash should return a value that will change if the time changes
+    pub fn hash(&self) -> u64 {
+        self.cycles
     }
 }
 

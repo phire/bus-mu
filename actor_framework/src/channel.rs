@@ -1,77 +1,45 @@
-use crate::{MakeNamed, object_map::ObjectStore, Time, MessagePacket, message_packet::MessagePacketInner, Handler, Addr};
+use crate::{MakeNamed, Time, MessagePacket, Handler, Addr, Named};
 
-impl<A, Name> Addr<A, Name>
- where Name: MakeNamed,
-[(); Name::COUNT]:
+impl<A, ActorNames> Addr<A, ActorNames>
+ where ActorNames: MakeNamed,
+[(); ActorNames::COUNT]:
 {
-    pub fn make_channel<M>(&self) -> Channel<M, Name>
-    where A : Handler<M, Name> + 'static,
+    pub fn make_channel<M>(&self) -> Channel<M, ActorNames>
+    where A : Handler<M> + Named<ActorNames>,
           M: 'static,
+          <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
     {
         Channel {
-            channel_fn: channel_fn::<A, M, Name>,
-            actor_name: A::name(),
+            channel_fn: channel_fn::<A, M, ActorNames>,
+            //actor_name: A::name(),
         }
     }
 }
 
-pub struct Channel<M, Name>
-    where Name: MakeNamed,
-        [(); Name::COUNT]:
+pub struct Channel<M, ActorNames>
+    where ActorNames: MakeNamed,
+        [(); ActorNames::COUNT]:
 {
-    channel_fn: fn (map: &mut ObjectStore<Name>, time: Time, message: M) -> MessagePacket<Name>,
-    actor_name: Name,
+    channel_fn: fn (time: Time, message: M) -> MessagePacket<ActorNames, M>,
+    //actor_name: ActorNames,
 }
 
 impl<M, Name> Channel<M, Name>
-    where M: 'static + core::fmt::Debug,
+    where M: 'static,// + core::fmt::Debug,
     Name: MakeNamed,
     [(); Name::COUNT] :
 {
-    pub fn send(&self, message: M, time: Time) -> MessagePacket<Name> {
-        MessagePacket {
-            inner: Some(Box::new(ChannelMessage::<M, Name>
-            {
-                message: message,
-                channel_fn: self.channel_fn,
-                actor_name: self.actor_name,
-            })),
-            time,
-        }
+    pub fn send(&self, message: M, time: Time) -> MessagePacket<Name, M> {
+        (self.channel_fn)(time, message)
     }
 }
 
-fn channel_fn<A, M, Name>(map: &mut ObjectStore<Name>, time: Time, message: M) -> MessagePacket<Name>
-where A: Handler<M, Name>,
+fn channel_fn<A, M, Name>(time: Time, message: M) -> MessagePacket<Name, M>
+where A: Handler<M> + Named<Name>,
       M: 'static,
       Name: MakeNamed,
+      <Name as MakeNamed>::Base: crate::Actor<Name>,
       [(); Name::COUNT]:
 {
-    map.get::<A>().recv(time, message)
-}
-
-
-#[derive(Debug)]
-pub struct ChannelMessage<M, Name>
-where M: 'static,
-      Name: MakeNamed,
-      [(); Name::COUNT]:
-{
-    message: M,
-    channel_fn: fn (map: &mut ObjectStore<Name>, time: Time, message: M) -> MessagePacket<Name>,
-    actor_name: Name,
-}
-
-impl<M, Name> MessagePacketInner<Name> for ChannelMessage<M, Name>
-        where M: 'static + core::fmt::Debug,
-            Name: MakeNamed,
-            [(); Name::COUNT]:
-{
-    fn execute(self: Box<Self>, map: &mut ObjectStore<Name>, time: Time) -> MessagePacket<Name> {
-        (self.channel_fn)(map, time, self.message)
-    }
-
-    fn actor_name(&self) -> Name {
-        self.actor_name
-    }
+    MessagePacket::new_channel::<A>(time, message)
 }

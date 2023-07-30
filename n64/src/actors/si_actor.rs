@@ -1,49 +1,48 @@
 
-use actor_framework::{MessagePacket, Time, Actor, Handler, Addr};
-use super::{N64Actors, bus_actor::{BusAccept, BusRequest}};
+use actor_framework::{Time, Actor, MessagePacketProxy, Handler, Outbox, OutboxSend};
 
+use super::{N64Actors, bus_actor::{BusAccept, BusRequest, BusActor}};
 
 pub struct SiActor {
+    outbox: SiOutbox,
     buffer: [u32; 16],
     state: SiState,
     burst: bool,
     cpu: bool,
-    pif_addr: Addr<super::pif_actor::PifActor, N64Actors>,
-    bus_addr: Addr<super::bus_actor::BusActor, N64Actors>,
 }
 
 impl Default for SiActor {
     fn default() -> Self {
         SiActor {
+            outbox: Default::default(),
             buffer: [0; 16],
             state: SiState::Idle,
             burst: false,
             cpu: false,
-            pif_addr: Default::default(),
-            bus_addr: Default::default(),
         }
     }
 }
 
+actor_framework::make_outbox!(
+    SiOutbox<N64Actors, SiActor> {
+        bus: BusRequest,
+        si_packet: SiPacket
+    }
+);
+
 impl Actor<N64Actors> for SiActor {
-    fn advance(&mut self, limit: Time) -> MessagePacket<N64Actors> {
-        MessagePacket::no_message(limit)
+    fn get_message(&mut self) -> &mut MessagePacketProxy<N64Actors> {
+        self.outbox.as_mut()
     }
 
-    fn advance_to(&mut self, target: Time) {
-        let result = self.advance(target);
-        assert!(result.is_none());
-        assert!(result.time == target);
-    }
-
-    fn horizon(&mut self) -> Time {
-        return Time::max();
+    fn message_delivered(&mut self, time: &Time) {
+        todo!()
     }
 }
 
 impl SiActor {
-    fn bus_request(&self, time: Time) -> MessagePacket<N64Actors> {
-        self.bus_addr.send(BusRequest::new::<Self>(1), time)
+    fn bus_request(&mut self, time: Time) {
+        self.outbox.send::<BusActor>(BusRequest::new::<Self>(1), time);
     }
 }
 
@@ -58,8 +57,8 @@ pub enum SiPacket {
 }
 
 // Handle responses from PIF
-impl Handler<SiPacket, N64Actors> for SiActor {
-    fn recv(&mut self, time: Time, message: SiPacket) -> MessagePacket<N64Actors> {
+impl Handler<SiPacket> for SiActor {
+    fn recv(&mut self, message: SiPacket, time: Time, _limit: Time) {
         let req_time;
         match message {
             SiPacket::Ack => { // PIF ready to receive our write data
@@ -89,9 +88,10 @@ enum SiState {
     Idle,
 }
 
-impl Handler<BusAccept, N64Actors> for SiActor {
-    fn recv(&mut self, time: Time, _: BusAccept) -> MessagePacket<N64Actors> {
+impl Handler<BusAccept> for SiActor {
+    fn recv(&mut self, _: BusAccept, time: Time, limit: Time) {
         let time = time.add(4 * 32);
+        /*
         let (state, msg) = match self.state {
             SiState::CpuRead => {
                 (SiState::Idle, MessagePacket::no_message(time))
@@ -120,6 +120,6 @@ impl Handler<BusAccept, N64Actors> for SiActor {
             }
         };
         self.state = state;
-        return msg;
+        */
     }
 }

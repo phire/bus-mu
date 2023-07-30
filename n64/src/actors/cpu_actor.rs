@@ -1,13 +1,13 @@
 
 /// CpuActor: Emulates the CPU and MI (Mips Interface)
 
-use actor_framework::{Actor, MessagePacket, Time};
-use super::N64Actors;
+use actor_framework::{Actor, Time, Handler, Outbox, OutboxSend};
+use super::{N64Actors, bus_actor::BusAccept};
 
-use crate::{vr4300};
+use crate::vr4300;
 
-#[derive(Default)]
 pub struct CpuActor {
+    outbox: CpuOutbox,
     committed_time: Time,
     cpu_overrun: u32,
     cpu_core: vr4300::Core,
@@ -15,6 +15,15 @@ pub struct CpuActor {
     dmem: Option<Box<[u32; 512]>>,
     outstanding_mem_request: Option<vr4300::Reason>,
 }
+
+actor_framework::make_outbox!(
+    CpuOutbox<N64Actors, CpuActor> {
+        bus: BusAccept,
+        run: CpuRun
+    }
+);
+
+struct CpuRun {}
 
 fn to_cpu_time(bus_time: u64, odd: u64) -> u64 {
     // CPU has a 1.5x clock multiplier
@@ -30,14 +39,28 @@ fn to_bus_time(cpu_time: u64, odd: u64) -> u64 {
     cpu_time - ((cpu_time + odd) / 3u64)
 }
 
-impl CpuActor {
+impl Default for CpuActor {
+    fn default() -> Self {
+        let mut outbox : CpuOutbox = Default::default();
+        outbox.send::<CpuActor>(CpuRun {}, Default::default());
+
+        CpuActor {
+            outbox,
+            committed_time: Default::default(),
+            cpu_overrun: 0,
+            cpu_core: Default::default(),
+            imem: None,
+            dmem: None,
+            outstanding_mem_request: None,
+        }
+    }
 }
 
-impl Actor<N64Actors> for CpuActor {
-    fn advance(&mut self, limit: Time) -> MessagePacket<N64Actors> {
+impl CpuActor {
+    fn advance(&mut self, limit: Time) {
         if self.outstanding_mem_request.is_some() {
             // We are stalled waiting for a memory request to return
-            return MessagePacket::no_message(limit);
+            return;
         }
 
         let limit_64: u64 = limit.into();
@@ -56,9 +79,9 @@ impl Actor<N64Actors> for CpuActor {
             println!("core did {} ({}) cycles and returned because {:?}", used_cycles,  result.cycles, result.reason);
             assert!(used_cycles <= cycles);
 
-            return match result.reason {
+            match result.reason {
                 vr4300::Reason::Limited => {
-                    MessagePacket::no_message(self.committed_time)
+                    self.outbox.send::<CpuActor>(CpuRun {}, self.committed_time);
                 }
                 vr4300::Reason::SyncRequest => {
                     assert!(limit.is_resolved());
@@ -70,7 +93,7 @@ impl Actor<N64Actors> for CpuActor {
                         continue;
                     }
 
-                    MessagePacket::no_message(self.committed_time)
+                    self.outbox.send::<CpuActor>(CpuRun {}, self.committed_time);
                 }
                 reason => {
                     // Request over C-BUS/D-BUS
@@ -139,22 +162,26 @@ impl Actor<N64Actors> for CpuActor {
             }
         };
     }
+}
 
-    fn advance_to(&mut self, target: Time) {
-        let result = self.advance(target);
-        assert!(result.is_none());
-        assert!(result.time == target);
+impl Actor<N64Actors> for CpuActor {
+    fn get_message(&mut self) -> &mut actor_framework::MessagePacketProxy<N64Actors> {
+        self.outbox.as_mut()
     }
 
-    fn horizon(&mut self) -> Time {
-        if self.outstanding_mem_request.is_some() {
-            // An outstanding memory request means the CPU is blocked until we get a return message
-            Time::max()
-        } else {
-            let commited: u64 = self.committed_time.into();
-            return (commited + self.cpu_overrun as u64).into();
-        }
-
+    fn message_delivered(&mut self, time: &Time) {
+        todo!()
     }
 }
 
+impl Handler<CpuRun> for CpuActor {
+    fn recv(&mut self, _: CpuRun, time: Time, limit: Time) {
+        self.advance(limit);
+    }
+}
+
+impl Handler<BusAccept> for CpuActor {
+    fn recv(&mut self, message: BusAccept, time: Time, limit: Time) {
+        todo!()
+    }
+}
