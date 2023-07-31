@@ -1,6 +1,6 @@
 
 use actor_framework::*;
-use super::{N64Actors, cpu_actor::{CpuReadFinished, CpuRegRead, CpuActor}};
+use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite}};
 
 pub struct RspActor {
     outbox: RspOutbox,
@@ -10,8 +10,8 @@ pub struct RspActor {
 
 make_outbox!(
     RspOutbox<N64Actors, RspActor> {
-        cpu: CpuReadFinished
-    }
+        cpu: ReadFinished,
+\    }
 );
 
 impl Default for RspActor {
@@ -66,8 +66,7 @@ impl Handler<CpuRegRead> for RspActor {
             0x0404_001c => { // SP_SEMAPHORE
                 todo!("SP_SEMAPHORE")
             }
-            _ => unreachable!()
-        };
-        self.outbox.send::<CpuActor>(CpuReadFinished::word(data), time.add(4));
+        self.outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
+
     }
 }

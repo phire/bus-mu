@@ -10,7 +10,7 @@ use pipeline::{MemoryReq, ExitReason};
 use regfile::RegFile;
 use pipeline::Pipeline;
 
-use crate::actors::cpu_actor::CpuReadFinished;
+use crate::actors::cpu_actor::{ReadFinished, WriteFinished};
 
 use self::pipeline::MemoryResponce;
 
@@ -192,7 +192,7 @@ impl Core {
         todo!("pipeline.set_time");
     }
 
-    pub fn finish_mem(&mut self, mem: CpuReadFinished ) {
+    pub fn finish_read(&mut self, mem: ReadFinished ) {
         let response = match self.outstanding_request {
             OutstandingRequestType::UncachedInstructionRead => {
                 let word = mem.data[0];
@@ -220,15 +220,27 @@ impl Core {
                     _ => unreachable!(),
                 }
             }
-            OutstandingRequestType::UncachedDataWrite => {
-                MemoryResponce::UncachedDataWrite
-            }
             OutstandingRequestType::ICacheFill => {
                 MemoryResponce::ICacheFill(mem.data)
             }
-            OutstandingRequestType::None => unreachable!(),
+            _ => unreachable!(),
         };
 
+        self.pipeline.memory_responce(
+            response,
+            &mut self.icache,
+            &mut self.dcache,
+            &mut self.regfile
+        )
+    }
+
+    pub fn finish_write(&mut self, mem: WriteFinished) {
+        let response = match self.outstanding_request {
+            OutstandingRequestType::UncachedDataWrite => {
+                MemoryResponce::UncachedDataWrite
+            }
+            _ => unreachable!(),
+        };
         self.pipeline.memory_responce(
             response,
             &mut self.icache,

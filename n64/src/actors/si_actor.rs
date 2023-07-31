@@ -1,7 +1,7 @@
 
 use actor_framework::{Time, Actor, MessagePacketProxy, Handler, Outbox, OutboxSend};
 
-use super::{N64Actors, bus_actor::{BusAccept, BusRequest, BusActor}, cpu_actor::{CpuRegRead, CpuActor, CpuLength, CpuReadFinished}, pif_actor::PifActor};
+use super::{N64Actors, bus_actor::{BusAccept, BusRequest, BusActor}, cpu_actor::{CpuRegRead, CpuActor, ReadFinished}, pif_actor::PifActor};
 
 pub struct SiActor {
     outbox: SiOutbox,
@@ -27,7 +27,7 @@ actor_framework::make_outbox!(
     SiOutbox<N64Actors, SiActor> {
         bus: BusRequest,
         si_packet: SiPacket,
-        cpu: CpuReadFinished
+        cpu: ReadFinished
     }
 );
 
@@ -85,7 +85,7 @@ impl Handler<CpuRegRead> for SiActor {
                     }
                     _ => unreachable!()
                 };
-                self.outbox.send::<CpuActor>(CpuReadFinished::word(data), time.add(4));
+                self.outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
             }
             0x1fc0_0000..=0x1fc0_07ff => { // PIF ROM/RAM
                 let pif_address = (address >> 2) as u16 & 0x1ff;
@@ -165,7 +165,7 @@ impl Handler<BusAccept> for SiActor {
         self.state = match self.state {
             SiState::CpuRead => {
                 self.outbox.send::<CpuActor>(
-                    CpuReadFinished::word(self.buffer[15]),
+                    ReadFinished::word(self.buffer[15]),
                     time);
                 SiState::Idle
             }

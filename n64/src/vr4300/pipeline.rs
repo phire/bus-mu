@@ -591,7 +591,7 @@ impl Pipeline {
                 self.dc.mem_size = 0;
             }
             MemoryResponce::UncachedDataWrite => {
-                // Do nothing
+                self.dc.mem_size = 0;
             }
         }
     }

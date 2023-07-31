@@ -20,7 +20,8 @@ actor_framework::make_outbox!(
     CpuOutbox<N64Actors, CpuActor> {
         bus: BusRequest,
         run: CpuRun,
-        reg: CpuRegRead
+        reg_write: CpuRegWrite,
+        reg: CpuRegRead,
     }
 );
 
@@ -127,6 +128,11 @@ pub struct CpuRegRead {
     pub address: u32
 }
 
+pub struct CpuRegWrite {
+    pub address: u32,
+    pub data: u32
+}
+
 impl Handler<BusAccept> for CpuActor {
     fn recv(&mut self, _: BusAccept, time: Time, _limit: Time) {
         let reason = self.outstanding_mem_request.take().unwrap();
@@ -200,12 +206,12 @@ pub enum CpuLength {
     OctWord = 8,
 }
 
-pub struct CpuReadFinished {
+pub struct ReadFinished {
     length: CpuLength,
     pub data: [u32; 8]
 }
 
-impl CpuReadFinished {
+impl ReadFinished {
     pub fn word(data: u32) -> Self {
         Self {
             length: CpuLength::Word,
@@ -236,10 +242,49 @@ impl CpuReadFinished {
     }
 }
 
-impl Handler<CpuReadFinished> for CpuActor {
-    fn recv(&mut self, message: CpuReadFinished, time: Time, _limit: Time) {
+impl Handler<ReadFinished> for CpuActor {
+    fn recv(&mut self, message: ReadFinished, time: Time, _limit: Time) {
         // It takes length cycles to send the data across the SysAD bus
         self.outbox.send::<CpuActor>(CpuRun{}, time.add(message.length()));
-        self.cpu_core.finish_mem(message);
+        self.cpu_core.finish_read(message);
+    }
+}
+
+pub struct WriteFinished {
+    length: CpuLength
+}
+
+impl WriteFinished {
+    pub fn word() -> Self {
+        Self {
+            length: CpuLength::Word
+        }
+    }
+    pub fn dword() -> Self {
+        Self {
+            length: CpuLength::Dword
+        }
+    }
+    pub fn qword() -> Self {
+        Self {
+            length: CpuLength::QWord
+        }
+    }
+    pub fn octword() -> Self {
+        Self {
+            length: CpuLength::OctWord
+        }
+    }
+
+    pub fn length(&self) -> u64 {
+        self.length as u64
+    }
+}
+
+impl Handler<WriteFinished> for CpuActor {
+    fn recv(&mut self, message: WriteFinished, time: Time, _limit: Time) {
+        // It takes length cycles to send the data across the SysAD bus
+        self.outbox.send::<CpuActor>(CpuRun{}, time.add(1));
+        self.cpu_core.finish_write(message);
     }
 }
