@@ -129,7 +129,7 @@ impl Pipeline {
                         writeback_value = cache_attempt.read(&dcache, mem_size);
                     }
                 } else {
-                    return ExitReason::Mem(cache_attempt.do_miss(&dcache, tlb_tag, self.dc.mem_size));
+                    return ExitReason::Mem(cache_attempt.do_miss(&dcache, tlb_tag, self.dc.mem_size, self.dc.store, writeback_value));
                 }
             }
 
