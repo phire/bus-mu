@@ -2,7 +2,7 @@
 /// CpuActor: Emulates the CPU and MI (Mips Interface)
 
 use actor_framework::{Actor, Time, Handler, Outbox, OutboxSend};
-use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor};
+use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor, pi_actor::PiActor, vi_actor::ViActor, ai_actor::AiActor};
 
 use crate::{vr4300, actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::RspActor}};
 
@@ -133,6 +133,23 @@ pub struct CpuRegWrite {
     pub data: u32
 }
 
+impl CpuActor {
+    fn do_reg<Dest>(&mut self, reason: vr4300::Reason, time: Time)
+    where
+        Dest: Actor<N64Actors> + Handler<CpuRegRead> + Handler<CpuRegWrite>
+    {
+        match reason {
+            vr4300::Reason::BusRead32(address) => {
+                self.outbox.send::<Dest>(CpuRegRead { address: address }, time);
+            }
+            vr4300::Reason::BusWrite32(address, data) => {
+                self.outbox.send::<Dest>(CpuRegWrite { address: address, data: data }, time);
+            }
+            _ => { panic!("unexpected bus operation") }
+        }
+    }
+}
+
 impl Handler<BusAccept> for CpuActor {
     fn recv(&mut self, _: BusAccept, time: Time, _limit: Time) {
         let reason = self.outstanding_mem_request.take().unwrap();
@@ -150,15 +167,7 @@ impl Handler<BusAccept> for CpuActor {
                     todo!("RSP IMEM")
                 }
                 0x0404_0000 | 0x0408_0000 => { // RSP Register
-                    match reason {
-                        vr4300::Reason::BusRead32(address) => {
-                            self.outbox.send::<RspActor>(CpuRegRead { address: address }, time);
-                        }
-                        vr4300::Reason::BusWrite32(address, data) => {
-                            self.outbox.send::<RspActor>(CpuRegWrite { address: address, data: data }, time);
-                        }
-                        _ => { panic!("unexpected bus operation for RSP register") }
-                    }
+                    self.do_reg::<RspActor>(reason, time);
                 }
                 0x040c_0000 => { // Unmapped {
                     todo!("Unmapped")
@@ -174,14 +183,14 @@ impl Handler<BusAccept> for CpuActor {
             0x0430_0000 => {
                 todo!("MIPS Interface")
             }
-            0x0440_0000 => {
-                todo!("Video Interface")
+            0x0440_0000 => { // Video Interface
+                self.do_reg::<ViActor>(reason, time);
             }
             0x0450_0000 => {
-                todo!("Audio Interface")
+                self.do_reg::<AiActor>(reason, time);
             }
-            0x0460_0000 => {
-                todo!("Peripheral Interface")
+            0x0460_0000 => { // Peripheral Interface
+                self.do_reg::<PiActor>(reason, time);
             }
             0x0470_0000 => {
                 todo!("RDRAM Interface")
@@ -193,7 +202,7 @@ impl Handler<BusAccept> for CpuActor {
                 todo!("Unmapped")
             }
             0x1fc0_0000 => { // SI External Bus
-                self.outbox.send::<SiActor>(CpuRegRead { address }, time);
+                self.do_reg::<SiActor>(reason, time);
             }
             0x0500_0000..=0x7fff_0000 => { // PI External bus
                 todo!("PI External Bus")

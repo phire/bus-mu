@@ -1,7 +1,7 @@
 
 use actor_framework::{Time, Actor, MessagePacketProxy, Handler, Outbox, OutboxSend};
 
-use super::{N64Actors, bus_actor::{BusAccept, BusRequest, BusActor}, cpu_actor::{CpuRegRead, CpuActor, ReadFinished}, pif_actor::PifActor};
+use super::{N64Actors, bus_actor::{BusAccept, BusRequest, BusActor}, cpu_actor::{CpuRegRead, CpuActor, ReadFinished, CpuRegWrite}, pif_actor::PifActor};
 
 pub struct SiActor {
     outbox: SiOutbox,
@@ -109,6 +109,12 @@ impl Handler<CpuRegRead> for SiActor {
     }
 }
 
+impl Handler<CpuRegWrite> for SiActor {
+    fn recv(&mut self, message: CpuRegWrite, time: Time, limit: Time) {
+        unimplemented!("SiActor::CpuRegWrite")
+    }
+}
+
 #[derive(Debug)]
 pub enum SiPacket {
     Read4(u16),
@@ -201,3 +207,5 @@ impl Handler<BusAccept> for SiActor {
         };
     }
 }
+
+

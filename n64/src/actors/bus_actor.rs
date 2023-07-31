@@ -40,7 +40,10 @@ const fn piority(actor: N64Actors) -> u16 {
     match actor {
         // All priorities should be unique
         N64Actors::SiActor => 50, // SI has a high priority because it has no buffer and no way to pause serial transfers
+        N64Actors::AiActor => 45, // Guess, needs to be reasonably high, buffer is pretty small
+        N64Actors::ViActor => 40, // Guess, needs to be reasonably high, buffer is pretty small
         N64Actors::RspActor => 3, // Guess
+        N64Actors::PiActor => 2,
         N64Actors::CpuActor => 1,
         N64Actors::BusActor | N64Actors::PifActor => {debug_assert!(false); 0}, // shouldn't happen
     }
