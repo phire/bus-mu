@@ -162,8 +162,17 @@ where
 
 #[macro_export]
 macro_rules! make_outbox {
-    // Main entry point
-    ($name:ident<$name_type:ty, $sender:ty> { $( $i:ident : $t:ty ),+ } ) => {
+    // Main entry point of macro
+    (
+        // match OutboxName<ActorNames, Sender>
+        $name:ident<$name_type:ty, $sender:ty>
+        {
+            // match One or more fields of `name: MessageType,`
+            $( $i:ident : $t:ty ),+
+            // match optional trailing commas
+            $(,)?
+        }
+    ) => {
         union $name {
             none: core::mem::ManuallyDrop<actor_framework::MessagePacket<$name_type, ()>>,
             $($i : core::mem::ManuallyDrop<actor_framework::MessagePacket<$name_type, $t>>),+
@@ -188,11 +197,19 @@ macro_rules! make_outbox {
             }
         }
 
-        // Create all outbox send impls
+        // Create all OutboxSend<MessageType> traits
         actor_framework::make_outbox!(@impl $name<$name_type>, $($i : $t),+ );
     };
-    // Called for every union field
-    (@impl $name:ident<$name_type:ty>, $field_ident:ident : $field_type:ty ) => {
+    // Called for every union field to implement an OutboxSend<MessageType> trait
+    (
+
+        // match macro internal @impl tag
+        @impl
+        // match OutboxName<ActorNames>,
+        $name:ident<$name_type:ty>,
+        // match exactly one field of `name: MessageType`
+        $field_ident:ident : $field_type:ty
+    ) => {
         impl actor_framework::OutboxSend<$name_type, $field_type> for $name {
             fn send<Receiver>(&mut self, message: $field_type, time: Time)
             where
@@ -217,7 +234,7 @@ macro_rules! make_outbox {
 
         }
     };
-
+    // Call above rule for every field
     (@impl $name:ident<$name_type:ty>, $i:ident : $t:ty, $($tail:tt)+) => {
         actor_framework::make_outbox!(@impl $name<$name_type>, $i : $t);
         actor_framework::make_outbox!(@impl $name<$name_type>, $($tail)+);
