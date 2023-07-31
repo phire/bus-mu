@@ -4,6 +4,8 @@ use super::{N64Actors, cpu_actor::{CpuReadFinished, CpuRegRead, CpuActor}};
 
 pub struct RspActor {
     outbox: RspOutbox,
+    halted: bool,
+    dma_busy: bool,
 }
 
 make_outbox!(
@@ -16,6 +18,10 @@ impl Default for RspActor {
     fn default() -> Self {
         Self {
             outbox: Default::default(),
+            // HWTEST: IPL1 starts with a loop checking this bit, which implies that RSP might not
+            //         enter the halted state immediately on reset.
+            halted: true,
+            dma_busy: false,
         }
     }
 }
@@ -47,13 +53,15 @@ impl Handler<CpuRegRead> for RspActor {
                 todo!("SP_DMA_WRLEN")
             }
             0x0404_0010 => { // SP_STATUS
-                1 // halted
+                // todo: remaining bits
+                (self.dma_busy as u32) << 2 |
+                (self.halted as u32) << 0
             }
             0x0404_0014 => { // SP_DMA_FULL
                 todo!("SP_DMA_FULL")
             }
             0x0404_0018 => { // SP_DMA_BUSY
-                todo!("SP_DMA_BUSY")
+                self.dma_busy as u32
             }
             0x0404_001c => { // SP_SEMAPHORE
                 todo!("SP_SEMAPHORE")

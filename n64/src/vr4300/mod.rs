@@ -295,6 +295,25 @@ impl Reason {
     }
 }
 
+impl std::fmt::Display for Reason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Reason::Limited => write!(f, "Limited"),
+            Reason::SyncRequest => write!(f, "SyncRequest"),
+            Reason::BusRead32(addr) => write!(f, "BusRead32({:#08x})", addr),
+            Reason::BusRead64(addr) => write!(f, "BusRead64({:#08x})", addr),
+            Reason::BusRead128(addr) => write!(f, "BusRead128({:#08x})", addr),
+            Reason::BusRead256(addr) => write!(f, "BusRead256({:#08x})", addr),
+            Reason::BusWrite8(addr, data) => write!(f, "BusWrite8({:#08x}, {:#02x})", addr, data),
+            Reason::BusWrite16(addr, data) => write!(f, "BusWrite16({:#08x}, {:#04x})", addr, data),
+            Reason::BusWrite24(addr, data) => write!(f, "BusWrite24({:#08x}, {:#06x})", addr, data),
+            Reason::BusWrite32(addr, data) => write!(f, "BusWrite32({:#08x}, {:#08x})", addr, data),
+            Reason::BusWrite64(addr, data) => write!(f, "BusWrite64({:#08x}, {:#016x})", addr, data),
+            Reason::BusWrite128(addr, data) => write!(f, "BusWrite128({:08x}, {:?})", addr, data),
+        }
+    }
+}
+
 pub struct CoreRunResult {
     pub cycles: u64,
     pub reason: Reason,

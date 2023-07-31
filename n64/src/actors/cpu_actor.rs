@@ -77,7 +77,7 @@ impl CpuActor {
             let used_cycles = to_bus_time(result.cycles, odd);
             commit_time_64 += used_cycles;
             self.committed_time = commit_time_64.into();
-            println!("core did {} ({}) cycles and returned {:?} at {}", used_cycles,  result.cycles, result.reason, commit_time_64);
+            println!("core did {} ({}) cycles and returned {} at cycle {}", used_cycles,  result.cycles, result.reason, commit_time_64);
             assert!(used_cycles <= cycles);
 
             return match result.reason {
