@@ -31,27 +31,28 @@ make_outbox!(
 pub struct BusAccept {}
 
 pub struct BusRequest {
-    piority: u32,
-    count: u32,
     channel: Channel<BusAccept, N64Actors>,
+    piority: u16,
+    count: u16,
 }
 
-const fn piority(actor: N64Actors) -> u32 {
+const fn piority(actor: N64Actors) -> u16 {
     match actor {
+        // All priorities should be unique
         N64Actors::SiActor => 50, // SI has a high priority because it has no buffer and no way to pause serial transfers
-        N64Actors::CpuActor => 0,
-        N64Actors::BusActor | N64Actors::PifActor => 0, // shouldn't happen
+        N64Actors::CpuActor => 1,
+        N64Actors::BusActor | N64Actors::PifActor => {debug_assert!(false); 0}, // shouldn't happen
     }
 }
 
 impl BusRequest {
     /// Limitations: There can only be one outstanding bus request per actor
-    pub fn new<A>(count: u32) -> Self where A: Actor<N64Actors> + Handler<BusAccept> + 'static {
+    pub fn new<A>(count: u16) -> Self where A: Actor<N64Actors> + Handler<BusAccept> + 'static {
         let addr = Addr::<A, N64Actors>::default();
         Self {
+            channel: addr.make_channel::<BusAccept>(),
             piority: piority(A::name()),
             count,
-            channel: addr.make_channel::<BusAccept>(),
         }
     }
 }
@@ -66,7 +67,7 @@ impl Eq for BusRequest {}
 
 impl PartialOrd for BusRequest {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.piority.partial_cmp(&other.piority)
+        Some(self.cmp(other))
     }
 }
 
@@ -77,40 +78,46 @@ impl Ord for BusRequest {
 }
 
 impl Handler<BusRequest> for BusActor {
-    fn recv(&mut self, message: BusRequest, time: Time, limit: Time) {
-        if self.queue.is_empty() {
+    fn recv(&mut self, mut message: BusRequest, time: Time, _limit: Time) {
+        if self.queue.is_empty() && self.commited_time < time {
+            // There are no outstanding requests, so we can just accept this one
             self.commited_time = time;
+            self.outbox.send_channel(&message.channel, BusAccept { }, time.add(1));
+            self.queue.push(message);
+        } else {
+            let new_piority = message.piority;
+            self.queue.push(message);
+
+            if self.commited_time == time {
+                // We already accepted a request this cycle, but we might need to change our mind and
+                // accept this one if it has a higher piority
+                let highest = self.queue.peek().unwrap();
+
+                // Note: All priorities should be unique per sender, and they are only allowed one outstanding request
+                //       So we can just compare priorities
+                if highest.piority == new_piority {
+                    // This request takes priority
+                    self.outbox.send_channel(&highest.channel, BusAccept { }, time.add(1));
+                }
+            }
         }
-        self.queue.push(message);
     }
 }
-
 
 impl Actor<N64Actors> for BusActor {
     fn get_message(&mut self) -> &mut MessagePacketProxy<N64Actors> {
         self.outbox.as_mut()
     }
 
-    fn message_delivered(&mut self, time: &Time) {
-        todo!()
+    fn message_delivered(&mut self, _time: Time) {
+        let request = self.queue.pop().unwrap();
+        // Increment time to end of delivered request
+        self.commited_time = self.commited_time.add(request.count.into());
+        drop(request);
+
+        // Process next request
+        if let Some(request) = self.queue.peek() {
+            self.outbox.send_channel(&request.channel, BusAccept { }, self.commited_time.add(1));
+        }
     }
-    // fn advance(&mut self, limit: Time) -> MessagePacket<N64Actors> {
-    //     debug_assert!(!self.queue.is_empty());
-    //     let request = self.queue.pop().unwrap();
-    //     let time = self.commited_time.add(1);
-
-    //     self.commited_time = time.add(request.count.into());
-    //     return request.channel.send(BusAccept {}, time);
-    // }
-
-    // fn advance_to(&mut self, target: Time) {
-    //     debug_assert!(target >= self.commited_time);
-    // }
-
-    // fn horizon(&mut self) -> Time {
-    //     return match self.queue.is_empty() {
-    //         true => Time::max(),
-    //         false => self.commited_time,
-    //     }
-    // }
 }

@@ -1,14 +1,14 @@
 
 use actor_framework::{Time, Actor, MessagePacketProxy, Handler, Outbox, OutboxSend};
 
-use super::{N64Actors, bus_actor::{BusAccept, BusRequest, BusActor}};
+use super::{N64Actors, bus_actor::{BusAccept, BusRequest, BusActor}, cpu_actor::{CpuRegRead, CpuActor, CpuLength, CpuReadFinished}, pif_actor::PifActor};
 
 pub struct SiActor {
     outbox: SiOutbox,
     buffer: [u32; 16],
     state: SiState,
-    burst: bool,
-    cpu: bool,
+    dram_address: u32,
+    dma_active: bool,
 }
 
 impl Default for SiActor {
@@ -17,8 +17,8 @@ impl Default for SiActor {
             outbox: Default::default(),
             buffer: [0; 16],
             state: SiState::Idle,
-            burst: false,
-            cpu: false,
+            dram_address: 0,
+            dma_active: false,
         }
     }
 }
@@ -26,7 +26,8 @@ impl Default for SiActor {
 actor_framework::make_outbox!(
     SiOutbox<N64Actors, SiActor> {
         bus: BusRequest,
-        si_packet: SiPacket
+        si_packet: SiPacket,
+        cpu: CpuReadFinished
     }
 );
 
@@ -35,8 +36,10 @@ impl Actor<N64Actors> for SiActor {
         self.outbox.as_mut()
     }
 
-    fn message_delivered(&mut self, time: &Time) {
-        todo!()
+    fn message_delivered(&mut self, time: Time) {
+        if self.dma_active {
+            self.bus_request(time)
+        }
     }
 }
 
@@ -46,6 +49,70 @@ impl SiActor {
     }
 }
 
+impl Handler<CpuRegRead> for SiActor {
+    fn recv(&mut self, message: CpuRegRead, time: Time, limit: Time) {
+        match self.state {
+            SiState::Idle => {}
+            // HWTEST: What should happen when SI is busy?
+            //         N64brew suggests bus conflicts.
+            _ => panic!("SI is busy")
+        }
+
+        let address = message.address;
+        match address {
+            0x0480_0000..=0x048f_ffff => {
+                match address & 0x1c {
+                    0x00 => { // SI DRAM address
+                        self.outbox.send::<CpuActor>(
+                            CpuReadFinished {
+                                length: CpuLength::Word,
+                                data: [self.dram_address, 0, 0, 0, 0, 0, 0, 0]
+                            }, time);
+                    }
+                    0x04 => { // SI PIF read64
+                        unimplemented!()
+                    }
+                    0x08 => { // SI PIF write4
+                        unimplemented!()
+                    }
+                    0x0c | 0x1c => { // ???
+                        unimplemented!()
+                    }
+                    0x10 => { // SI PIF write 64
+                        unimplemented!()
+                    }
+                    0x14 => { // SI PIF read 4
+                        unimplemented!()
+                    }
+                    0x18 => { // SI status
+                        unimplemented!()
+                    }
+                    _ => unreachable!()
+                }
+            }
+            0x1fc0_0000..=0x1fc0_07ff => { // PIF ROM/RAM
+                let pif_address = (address >> 2) as u16 & 0x1ff;
+                let mut time64 : u64 = time.into();
+
+                // align with 4 cycle boundary
+                time64 = (time64 + 3) & !3;
+                time64 += 4 * 12; // The command packet is 11 bits long, with an extra start bit
+
+                println!("PIF Read {:08x} at {}", address, time64);
+                self.state = SiState::CpuRead;
+
+                self.outbox.send::<PifActor>(SiPacket::Read4(pif_address), time64.into());
+            }
+            0x1fc0_0800..=0x1fcf_ffff => {
+                // Reserved SI range... not sure what should happen here
+                unimplemented!("Si Reserved range")
+            }
+            _ => { unreachable!() }
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum SiPacket {
     Read4(u16),
     Read64(u16),
@@ -62,17 +129,24 @@ impl Handler<SiPacket> for SiActor {
         let req_time;
         match message {
             SiPacket::Ack => { // PIF ready to receive our write data
-                req_time = time.add(1);
+                req_time = time.add(4);
+                match self.state {
+                    SiState::CpuRead | SiState::DmaRead(_) => {
+                        return self.outbox.send::<PifActor>(SiPacket::Ack, req_time);
+                    }
+                    _ => {}
+                }
             }
             SiPacket::Data4(data) => { // 4 byte read finished
                 self.buffer[15] = data;
+                // PifActor delivers it's response instantly.
+                // It's upto SiActor to add delays
                 req_time = time.add(1 + 4 + 4 * 32);
-
-                // PifActor doesn't take into account the time it takes to send data over the serial link
             }
             SiPacket::Data64(data) => { // 64 byte read finished
                 self.buffer = data;
                 req_time = time.add(1 + 4 + 4 * 32);
+                self.dma_active = true;
             }
             _ => panic!("Invalid message")
         }
@@ -89,37 +163,46 @@ enum SiState {
 }
 
 impl Handler<BusAccept> for SiActor {
-    fn recv(&mut self, _: BusAccept, time: Time, limit: Time) {
-        let time = time.add(4 * 32);
-        /*
-        let (state, msg) = match self.state {
+    fn recv(&mut self, _: BusAccept, time: Time, _limit: Time) {
+        //let time = time.add(4 * 32);
+        self.state = match self.state {
             SiState::CpuRead => {
-                (SiState::Idle, MessagePacket::no_message(time))
+                self.outbox.send::<CpuActor>(
+                    CpuReadFinished {
+                        length: CpuLength::Word,
+                        data: [self.buffer[15], 0, 0, 0, 0, 0, 0, 0]
+                    }, time);
+                SiState::Idle
             }
             SiState::DmaRead(1) => {
-                (SiState::Idle, MessagePacket::no_message(time))
+                self.dma_active = false;
+                unimplemented!("Write to RDRAM");
+                //SiState::Idle
             }
             SiState::CpuWrite => {
-                (SiState::Idle, MessagePacket::no_message(time))
+                unimplemented!("Tell cpu write finished");
+                //SiState::Idle
             }
             SiState::DmaWrite(1) => {
-                let data_msg = match self.burst {
-                    true => SiPacket::Data64(self.buffer),
-                    false => SiPacket::Data4(self.buffer[15])
-                };
-                (SiState::Idle, self.pif_addr.send(data_msg, time))
+                unimplemented!("Read from RDRAM");
+                // let data_msg = match self.burst {
+                //     true => SiPacket::Data64(self.buffer),
+                //     false => SiPacket::Data4(self.buffer[15])
+                // };
+                // self.outbox.send::<PifActor>(data_msg, time);
+                // SiState::Idle
             }
             SiState::DmaRead(count) => {
-                (SiState::DmaRead(count-1), MessagePacket::no_message(time))
+                unimplemented!("Write to RDRAM");
+                //SiState::DmaRead(count-1)
             }
             SiState::DmaWrite(count) => {
-                (SiState::DmaWrite(count-1), MessagePacket::no_message(time))
+                unimplemented!("Read from RDRAM");
+                //SiState::DmaWrite(count-1)
             }
             SiState::Idle => {
                 unreachable!()
             }
         };
-        self.state = state;
-        */
     }
 }

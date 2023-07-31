@@ -49,6 +49,8 @@ ActorNames: MakeNamed,
             // PERF: Going though this trait object is potentially problematic for performance.
            //        Might need to look into Arbitrary Self Types or another nasty unsafe hack
             let message = &mut self.actors.get_id(sender_id).get_message();
+
+            //println!("Running actor {:?} at time {:?}", sender_id, message.time);
             let execute_fn = message.execute_fn.expect("Execute fn missing");
 
             (execute_fn)(sender_id, &mut self.actors, limit);

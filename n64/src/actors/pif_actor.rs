@@ -1,7 +1,7 @@
 /// PifActor: Emulates the SI (Serial Interface) and the connected PIF
 
 
-use actor_framework::{Actor, Time, Handler, Addr, make_outbox, Outbox, OutboxSend};
+use actor_framework::{Actor, Time, Handler, make_outbox, Outbox, OutboxSend};
 use super::{N64Actors, si_actor::{SiPacket, SiActor}};
 
 pub struct PifActor {
@@ -43,32 +43,13 @@ impl Actor<N64Actors> for PifActor {
         self.outbox.as_mut()
     }
 
-    fn message_delivered(&mut self, time: &Time) {
-        todo!()
+    fn message_delivered(&mut self, time: Time) {
+        // Nothing to do?
     }
-    // fn advance(&mut self, limit: Time) -> MessagePacket<N64Actors> {
-    //     MessagePacket::no_message(limit)
-    // }
-
-    // fn advance_to(&mut self, target: Time) {
-    //     let result = self.advance(target);
-    //     assert!(result.is_none());
-    //     assert!(result.time == target);
-    // }
-
-    // fn horizon(&mut self) -> Time {
-    //     // if let Some((time, _)) = self.queued_response {
-    //     //     return time;
-    //     // }
-
-    //     return Time::max();
-    // }
 }
 
 impl PifActor {
     fn read(&mut self, time: Time) {
-        let si_addr: Addr<super::si_actor::SiActor, N64Actors> = Default::default();
-
         let addr = (self.addr & 0x1ff) as usize;
         match self.burst {
             false => {
@@ -97,7 +78,7 @@ enum PifState {
 }
 
 impl Handler<SiPacket> for PifActor {
-    fn recv(&mut self, message: SiPacket, time: Time, limit: Time) {
+    fn recv(&mut self, message: SiPacket, time: Time, _limit: Time) {
         match self.state {
             PifState::WaitCmd => {
                 match message {

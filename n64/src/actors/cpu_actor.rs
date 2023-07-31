@@ -2,9 +2,9 @@
 /// CpuActor: Emulates the CPU and MI (Mips Interface)
 
 use actor_framework::{Actor, Time, Handler, Outbox, OutboxSend};
-use super::{N64Actors, bus_actor::BusAccept};
+use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor};
 
-use crate::vr4300;
+use crate::{vr4300, actors::bus_actor::{BusActor, BusRequest}};
 
 pub struct CpuActor {
     outbox: CpuOutbox,
@@ -18,8 +18,9 @@ pub struct CpuActor {
 
 actor_framework::make_outbox!(
     CpuOutbox<N64Actors, CpuActor> {
-        bus: BusAccept,
-        run: CpuRun
+        bus: BusRequest,
+        run: CpuRun,
+        reg: CpuRegRead
     }
 );
 
@@ -76,10 +77,10 @@ impl CpuActor {
             let used_cycles = to_bus_time(result.cycles, odd);
             commit_time_64 += used_cycles;
             self.committed_time = commit_time_64.into();
-            println!("core did {} ({}) cycles and returned because {:?}", used_cycles,  result.cycles, result.reason);
+            println!("core did {} ({}) cycles and returned {:?} at {}", used_cycles,  result.cycles, result.reason, commit_time_64);
             assert!(used_cycles <= cycles);
 
-            match result.reason {
+            return match result.reason {
                 vr4300::Reason::Limited => {
                     self.outbox.send::<CpuActor>(CpuRun {}, self.committed_time);
                 }
@@ -98,68 +99,9 @@ impl CpuActor {
                 reason => {
                     // Request over C-BUS/D-BUS
                     self.outstanding_mem_request = Some(reason);
-
-                    let address = reason.address();
-
-                    match address & 0xfff0_0000 {
-                        0x0000_0000..=0x03ff_ffff => { // RDRAM
-                            todo!("RDRAM")
-                        }
-                        0x0400_0000 => match address & 0x040c_0000 { // RSP
-                            0x0400_0000 if address & 0x1000 == 0 => { // DMEM Direct access
-                                todo!("RSP DMEM")
-                            }
-                            0x0400_0000 if address & 0x1000 != 0 => { // IMEM Direct access
-                                todo!("RSP IMEM")
-                            }
-                            0x0404_0000 | 0x0408_0000 => { // RSP Registers
-                                todo!("RSP Regs")
-                            }
-                            0x040c_0000 => { // Unmapped {
-                                todo!("Unmapped")
-                            }
-                            _ => unreachable!()
-                        }
-                        0x0410_0000 => { // RDP Command Regs
-                            todo!("RDP Command Regs")
-                        }
-                        0x0420_0000 => {
-                            todo!("RDP Span Regs")
-                        }
-                        0x0430_0000 => {
-                            todo!("MIPS Interface")
-                        }
-                        0x0440_0000 => {
-                            todo!("Video Interface")
-                        }
-                        0x0450_0000 => {
-                            todo!("Audio Interface")
-                        }
-                        0x0460_0000 => {
-                            todo!("Peripheral Interface")
-                        }
-                        0x0470_0000 => {
-                            todo!("RDRAM Interface")
-                        }
-                        0x0480_0000 => {
-                            todo!("Serial Interface")
-                        }
-                        0x0490_0000..=0x04ff_ffff => {
-                            todo!("Unmapped")
-                        }
-                        0x1fc0_0000 => { // SI External Bus
-                            todo!("SI External Bus")
-                        }
-                        0x0500_0000..=0x7fff_0000 => { // PI External bus
-                            todo!("PI External Bus")
-                        }
-                        0x8000_0000..=0xffff_ffff => {
-                            todo!("Unmapped")
-                        }
-                        _ => unreachable!()
-                    }
+                    self.outbox.send::<BusActor>(BusRequest::new::<Self>(1), self.committed_time);
                 }
-            }
+            };
         };
     }
 }
@@ -169,19 +111,112 @@ impl Actor<N64Actors> for CpuActor {
         self.outbox.as_mut()
     }
 
-    fn message_delivered(&mut self, time: &Time) {
-        todo!()
+    fn message_delivered(&mut self, time: Time) {
+        // hmmm....
     }
 }
 
 impl Handler<CpuRun> for CpuActor {
     fn recv(&mut self, _: CpuRun, time: Time, limit: Time) {
+        self.committed_time = time;
         self.advance(limit);
     }
 }
 
+pub struct CpuRegRead {
+    pub address: u32
+}
+
 impl Handler<BusAccept> for CpuActor {
-    fn recv(&mut self, message: BusAccept, time: Time, limit: Time) {
-        todo!()
+    fn recv(&mut self, _: BusAccept, time: Time, _limit: Time) {
+        let reason = self.outstanding_mem_request.take().unwrap();
+        let address = reason.address();
+
+        println!("Cpu bus");
+
+        match address & 0xfff0_0000 {
+            0x0000_0000..=0x03ff_ffff => { // RDRAM
+                todo!("RDRAM")
+            }
+            0x0400_0000 => match address & 0x040c_0000 { // RSP
+                0x0400_0000 if address & 0x1000 == 0 => { // DMEM Direct access
+                    todo!("RSP DMEM")
+                }
+                0x0400_0000 if address & 0x1000 != 0 => { // IMEM Direct access
+                    todo!("RSP IMEM")
+                }
+                0x0404_0000 | 0x0408_0000 => { // RSP Registers
+                    todo!("RSP Regs")
+                }
+                0x040c_0000 => { // Unmapped {
+                    todo!("Unmapped")
+                }
+                _ => unreachable!()
+            }
+            0x0410_0000 => { // RDP Command Regs
+                todo!("RDP Command Regs")
+            }
+            0x0420_0000 => {
+                todo!("RDP Span Regs")
+            }
+            0x0430_0000 => {
+                todo!("MIPS Interface")
+            }
+            0x0440_0000 => {
+                todo!("Video Interface")
+            }
+            0x0450_0000 => {
+                todo!("Audio Interface")
+            }
+            0x0460_0000 => {
+                todo!("Peripheral Interface")
+            }
+            0x0470_0000 => {
+                todo!("RDRAM Interface")
+            }
+            0x0480_0000 => {
+                todo!("Serial Interface")
+            }
+            0x0490_0000..=0x04ff_ffff => {
+                todo!("Unmapped")
+            }
+            0x1fc0_0000 => { // SI External Bus
+                self.outbox.send::<SiActor>(CpuRegRead { address }, time);
+            }
+            0x0500_0000..=0x7fff_0000 => { // PI External bus
+                todo!("PI External Bus")
+            }
+            0x8000_0000..=0xffff_ffff => {
+                todo!("Unmapped")
+            }
+            _ => unreachable!()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CpuLength {
+    Word = 1,
+    Dword = 2,
+    QWord = 4,
+    OctWord = 8,
+}
+
+pub struct CpuReadFinished {
+    pub length: CpuLength,
+    pub data: [u32; 8]
+}
+
+impl CpuReadFinished {
+    pub fn length(&self) -> u64 {
+        self.length as u64
+    }
+}
+
+impl Handler<CpuReadFinished> for CpuActor {
+    fn recv(&mut self, message: CpuReadFinished, time: Time, _limit: Time) {
+        // It takes length cycles to send the data across the SysAD bus
+        self.outbox.send::<CpuActor>(CpuRun{}, time.add(message.length()));
+        self.cpu_core.finish_mem(message);
     }
 }

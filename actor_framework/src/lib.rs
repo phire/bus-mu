@@ -26,7 +26,7 @@ where
     [(); ActorNames::COUNT]:
 {
     fn get_message(&mut self) -> &mut MessagePacketProxy<ActorNames>;
-    fn message_delivered(&mut self, time: &Time);
+    fn message_delivered(&mut self, time: Time);
 }
 
 pub trait Handler<M> where {

@@ -10,6 +10,10 @@ use pipeline::{MemoryReq, ExitReason};
 use regfile::RegFile;
 use pipeline::Pipeline;
 
+use crate::actors::cpu_actor::CpuReadFinished;
+
+use self::pipeline::MemoryResponce;
+
 pub mod instructions;
 pub mod pipeline;
 pub mod coprocessor0;
@@ -84,6 +88,16 @@ pub fn test() {
     }
 }
 
+enum OutstandingRequestType {
+    None,
+    ICacheFill,
+    DCacheFill,
+    DCacheReplace,
+    UncachedInstructionRead,
+    UncachedDataRead,
+    UncachedDataWrite,
+}
+
 pub struct Core {
     pipeline: Pipeline,
     icache: ICache,
@@ -91,7 +105,8 @@ pub struct Core {
     itlb: ITlb,
     regfile: RegFile,
     //bus: SysADBus,
-    queued_flush: Option<(u32, [u8; 16])>
+    queued_flush: Option<(u32, [u8; 16])>,
+    outstanding_request: OutstandingRequestType,
 }
 
 impl Core {
@@ -119,24 +134,29 @@ impl Core {
                 ExitReason::Ok => { continue; }
                 ExitReason::Mem(MemoryReq::ICacheFill(addr)) => {
                     println!("ICache fill: {:08x}", addr);
+                    self.outstanding_request = OutstandingRequestType::ICacheFill;
                     Reason::BusRead256(addr)
                 }
                 ExitReason::Mem(MemoryReq::DCacheFill(addr)) => {
                     println!("DCache fill: {:08x}", addr);
+                    self.outstanding_request = OutstandingRequestType::DCacheFill;
                     Reason::BusRead128(addr)
                 }
                 ExitReason::Mem(MemoryReq::DCacheReplace(new_addr, old_addr, _data)) => {
                     println!("DCache replace: {:08x} -> {:08x}", old_addr, new_addr);
+                    self.outstanding_request = OutstandingRequestType::DCacheReplace;
 
                     self.queued_flush = Some((old_addr, [0; 16]));
                     Reason::BusRead128(new_addr)
                 }
                 ExitReason::Mem(MemoryReq::UncachedInstructionRead(addr)) => {
                     println!("Uncached instruction read: {:08x}", addr);
+                    self.outstanding_request = OutstandingRequestType::UncachedInstructionRead;
                     Reason::BusRead32(addr)
                 }
                 ExitReason::Mem(MemoryReq::UncachedDataRead(addr, size)) => {
                     println!("Uncached data read: {:08x} ({} bytes)", addr, size);
+                    self.outstanding_request = OutstandingRequestType::UncachedDataRead;
                     match size {
                         1 | 2 | 4 => Reason::BusRead32(addr),
                         8 => Reason::BusRead64(addr),
@@ -145,6 +165,7 @@ impl Core {
                 }
                 ExitReason::Mem(MemoryReq::UncachedDataWrite(addr, size, data)) => {
                     println!("Uncached data write: {:08x} ({} bytes) = {:08x}", addr, size, data);
+                    self.outstanding_request = OutstandingRequestType::UncachedDataWrite;
                     match size {
                         1 => Reason::BusWrite8(addr, data as u32),
                         2 => Reason::BusWrite16(addr, data as u32),
@@ -171,6 +192,43 @@ impl Core {
         todo!("pipeline.set_time");
     }
 
+    pub fn finish_mem(&mut self, mem: CpuReadFinished ) {
+        let response = match self.outstanding_request {
+            OutstandingRequestType::UncachedInstructionRead => {
+                let word = mem.data[0];
+                let (inst, _inst_info) = instructions::decode(word);
+                let addr = self.pipeline.pc();
+                println!("(uncached) {:04x}: {:08x}    {}", addr, word, inst.disassemble(addr as u64));
+                MemoryResponce::UncachedInstructionRead(mem.data[0])
+            }
+            OutstandingRequestType::DCacheFill => {
+                todo!()
+                //MemoryResponce::DCacheFill([mem])
+            }
+            OutstandingRequestType::DCacheReplace => {
+                //MemoryResponce::DCacheReplace(mem.data)
+                todo!()
+            }
+            OutstandingRequestType::UncachedDataRead => {
+                MemoryResponce::UncachedDataRead((mem.data[0] as u64) << 32 | (mem.data[1] as u64))
+            }
+            OutstandingRequestType::UncachedDataWrite => {
+                MemoryResponce::UncachedDataWrite
+            }
+            OutstandingRequestType::ICacheFill => {
+                MemoryResponce::ICacheFill(mem.data)
+            }
+            OutstandingRequestType::None => unreachable!(),
+        };
+
+        self.pipeline.memory_responce(
+            response,
+            &mut self.icache,
+            &mut self.dcache,
+            &mut self.regfile
+        )
+    }
+
 }
 
 impl Default for Core {
@@ -182,6 +240,7 @@ impl Default for Core {
             itlb: ITlb::new(),
             regfile: RegFile::new(),
             queued_flush: None,
+            outstanding_request: OutstandingRequestType::None,
         }
     }
 }

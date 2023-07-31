@@ -44,7 +44,10 @@ where
         packet.take()
     };
 
+    //println!("direct_execute: {:?} {:?}", Receiver::name(), time);
+
     map.get::<Receiver>().recv(message, time, limit);
+    map.get::<Sender>().message_delivered(time);
 }
 
 fn channel_execute<ActorNames, Receiver, Message>(sender_id: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time)
@@ -63,6 +66,7 @@ where
     };
 
     map.get::<Receiver>().recv(message, time, limit);
+    map.get_id(sender_id).message_delivered(time);
 }
 
 impl<ActorNames> MessagePacketProxy<ActorNames>
@@ -150,10 +154,10 @@ where
     fn send<Receiver>(&mut self, message: Message, time: Time)
     where
         Receiver: Handler<Message> + Named<ActorNames>;
-    fn send_addr<Receiver>(&mut self, addr: Addr<Receiver, ActorNames>, message: Message, time: Time)
+    fn send_addr<Receiver>(&mut self, addr: &Addr<Receiver, ActorNames>, message: Message, time: Time)
     where
         Receiver: Handler<Message> + Named<ActorNames>;
-    fn send_channel(&mut self, channel: Channel<Message, ActorNames>, message: Message, time: Time);
+    fn send_channel(&mut self, channel: &Channel<Message, ActorNames>, message: Message, time: Time);
 }
 
 #[macro_export]
@@ -200,14 +204,13 @@ macro_rules! make_outbox {
                     <Self as actor_framework::Outbox<$name_type>>::Sender,
                     Receiver>(time, message));
             }
-            fn send_addr<Receiver>(&mut self, addr: actor_framework::Addr<Receiver, $name_type>, message: $field_type, time: Time)
+            fn send_addr<Receiver>(&mut self, addr: &actor_framework::Addr<Receiver, $name_type>, message: $field_type, time: Time)
             where
                 Receiver: actor_framework::Handler<$field_type> + actor_framework::Named<$name_type>,
-                //<Receiver as actor_framework::Named<$name_type>>::Base: crate::Actor<$name_type>,
             {
                 self.send::<Receiver>(message, time);
             }
-            fn send_channel(&mut self, channel: actor_framework::Channel<$field_type, $name_type>, message: $field_type, time: Time) {
+            fn send_channel(&mut self, channel: &actor_framework::Channel<$field_type, $name_type>, message: $field_type, time: Time) {
                 //debug_assert!(self.execute_fn.is_none());
                 self.$field_ident = core::mem::ManuallyDrop::new(channel.send(message, time));
             }
@@ -220,14 +223,3 @@ macro_rules! make_outbox {
         actor_framework::make_outbox!(@impl $name<$name_type>, $($tail)+);
     };
 }
-
-// struct A {}
-// struct B {}
-
-
-// make_outbox!(
-//     FooOutbox {
-//         a: A,
-//         b: B
-//     }
-// );
