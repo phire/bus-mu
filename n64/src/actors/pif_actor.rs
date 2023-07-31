@@ -105,7 +105,10 @@ impl Handler<SiPacket> for PifActor {
                     _ => panic!("Unexpected message"),
                 }
                 // HWTEST: UltraPIF inserts a 4 cycle delay here
-                return self.outbox.send::<SiActor>(SiPacket::Ack, time.add(4 * 4))
+                //         But n64-systembench indicates it's more like 1800 cycles
+                //         This is chaotic, caused by how long it takes for the sm5 core to respond
+                //         to an interrupt and halt
+                return self.outbox.send::<SiActor>(SiPacket::Ack, time.add(450 * 4))
             }
             PifState::WaitAck => match message {
                 SiPacket::Ack => {
