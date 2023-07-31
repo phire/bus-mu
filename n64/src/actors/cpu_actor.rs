@@ -4,7 +4,7 @@
 use actor_framework::{Actor, Time, Handler, Outbox, OutboxSend};
 use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor, pi_actor::PiActor, vi_actor::ViActor, ai_actor::AiActor};
 
-use crate::{vr4300, actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::RspActor}};
+use crate::{vr4300, actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::{RspActor, self}}};
 
 pub struct CpuActor {
     outbox: CpuOutbox,
@@ -22,6 +22,8 @@ actor_framework::make_outbox!(
         run: CpuRun,
         reg_write: CpuRegWrite,
         reg: CpuRegRead,
+        request_rsp_mem: rsp_actor::ReqestMemOwnership,
+        return_rsp_mem: rsp_actor::TransferMemOwnership,
     }
 );
 
@@ -148,6 +150,33 @@ impl CpuActor {
             _ => { panic!("unexpected bus operation") }
         }
     }
+
+    fn do_rspmem(&mut self, reason: vr4300::Reason, time: Time) {
+        let mem = match reason.address() & 0x1000 == 0 {
+            true => self.imem.as_mut(),
+            false => self.dmem.as_mut(),
+        };
+
+        if let Some(mem) = mem {
+            let offset = ((reason.address() >> 2) & 0x3ff) as usize;
+
+            match reason {
+                vr4300::Reason::BusRead32(_) => {
+                    let data = mem[offset];
+                    self.recv(ReadFinished::word(data), time, time)
+                }
+                vr4300::Reason::BusWrite32(_, data) => {
+                    mem[offset] = data;
+                    self.recv(WriteFinished::word(), time, time)
+                }
+                _ => { panic!("unexpected bus operation") }
+            }
+        } else {
+            // The CPU doesn't currently have ownership of imem/dmem, need to request it from RspActor
+            self.outstanding_mem_request = Some(reason);
+            self.outbox.send::<RspActor>(rsp_actor::ReqestMemOwnership {}, time)
+        }
+    }
 }
 
 impl Handler<BusAccept> for CpuActor {
@@ -161,10 +190,12 @@ impl Handler<BusAccept> for CpuActor {
             }
             0x0400_0000 => match address & 0x040c_0000 { // RSP
                 0x0400_0000 if address & 0x1000 == 0 => { // DMEM Direct access
-                    todo!("RSP DMEM")
+                    todo!("IMEM access {}", reason);
+                    self.do_rspmem(reason, time);
                 }
                 0x0400_0000 if address & 0x1000 != 0 => { // IMEM Direct access
-                    todo!("RSP IMEM")
+                    println!("IMEM access {}", reason);
+                    self.do_rspmem(reason, time);
                 }
                 0x0404_0000 | 0x0408_0000 => { // RSP Register
                     self.do_reg::<RspActor>(reason, time);
@@ -303,5 +334,25 @@ impl Handler<WriteFinished> for CpuActor {
         // It takes length cycles to send the data across the SysAD bus
         self.outbox.send::<CpuActor>(CpuRun{}, time.add(1));
         self.cpu_core.finish_write(message);
+    }
+}
+
+impl Handler<rsp_actor::TransferMemOwnership> for CpuActor {
+    fn recv(&mut self, message: rsp_actor::TransferMemOwnership, time: Time, _limit: Time) {
+        self.imem = Some(message.imem);
+        self.dmem = Some(message.dmem);
+
+        // We can now complete the memory request to imem or dmem
+        let reason = self.outstanding_mem_request.take().unwrap();
+        self.do_rspmem(reason, time)
+    }
+}
+
+impl Handler<rsp_actor::ReqestMemOwnership> for CpuActor {
+    fn recv(&mut self, _message: rsp_actor::ReqestMemOwnership, time: Time, _limit: Time) {
+        self.outbox.send::<RspActor>(rsp_actor::TransferMemOwnership {
+            imem: self.imem.take().unwrap(),
+            dmem: self.imem.take().unwrap(),
+        }, time.add(4));
     }
 }

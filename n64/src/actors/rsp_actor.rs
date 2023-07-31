@@ -6,12 +6,15 @@ pub struct RspActor {
     outbox: RspOutbox,
     halted: bool,
     dma_busy: bool,
+    imem: Option<Box<[u32; 512]>>,
+    dmem: Option<Box<[u32; 512]>>,
 }
 
 make_outbox!(
     RspOutbox<N64Actors, RspActor> {
         cpu: ReadFinished,
         cpu_w: WriteFinished,
+        send_mem: TransferMemOwnership,
     }
 );
 
@@ -20,9 +23,11 @@ impl Default for RspActor {
         Self {
             outbox: Default::default(),
             // HWTEST: IPL1 starts with a loop checking this bit, which implies that RSP might not
-            //         enter the halted state immediately on reset.
+            //         enter the halted state immediately on a soft reset.
             halted: true,
             dma_busy: false,
+            imem: Some(Box::new([0; 512])),
+            dmem: Some(Box::new([0; 512])),
         }
     }
 }
@@ -150,5 +155,33 @@ impl Handler<CpuRegWrite> for RspActor {
             _ => unimplemented!()
         };
         self.outbox.send::<CpuActor>(WriteFinished::word(), time.add(4))
+    }
+}
+
+
+pub(super) struct ReqestMemOwnership {}
+
+pub(super) struct TransferMemOwnership {
+    pub imem: Box<[u32; 512]>,
+    pub dmem: Box<[u32; 512]>,
+}
+
+impl Handler<TransferMemOwnership> for RspActor {
+    fn recv(&mut self, message: TransferMemOwnership, _time: Time, _limit: Time) {
+        self.imem = Some(message.imem);
+        self.dmem = Some(message.dmem);
+
+        // TODO: If the RSP is running, we need to continue it
+    }
+}
+
+impl Handler<ReqestMemOwnership> for RspActor {
+    fn recv(&mut self, _message: ReqestMemOwnership, time: Time, _limit: Time) {
+        // TODO: calculate timings for when RSP is busy
+        // TODO: Handle cases where the RSP DMA is active (which apparently corrupts CPU accesses)
+        self.outbox.send::<CpuActor>(TransferMemOwnership {
+            imem: self.imem.take().unwrap(),
+            dmem: self.dmem.take().unwrap(),
+        }, time);
     }
 }
