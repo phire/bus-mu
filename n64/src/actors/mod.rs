@@ -4,6 +4,7 @@ pub mod cpu_actor;
 pub mod pif_actor;
 pub mod si_actor;
 pub mod bus_actor;
+pub mod rsp_actor;
 
 #[derive(Named, PartialEq, Eq, Copy, Clone, Debug)]
 #[named(base(Actor))]
@@ -16,4 +17,6 @@ pub enum N64Actors {
     SiActor,
     #[named(class(bus_actor::BusActor))]
     BusActor,
+    #[named(class(rsp_actor::RspActor))]
+    RspActor,
 }

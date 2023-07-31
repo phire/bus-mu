@@ -4,7 +4,7 @@
 use actor_framework::{Actor, Time, Handler, Outbox, OutboxSend};
 use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor};
 
-use crate::{vr4300, actors::bus_actor::{BusActor, BusRequest}};
+use crate::{vr4300, actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::RspActor}};
 
 pub struct CpuActor {
     outbox: CpuOutbox,
@@ -146,7 +146,7 @@ impl Handler<BusAccept> for CpuActor {
                     todo!("RSP IMEM")
                 }
                 0x0404_0000 | 0x0408_0000 => { // RSP Registers
-                    todo!("RSP Regs")
+                    self.outbox.send::<RspActor>(CpuRegRead { address: address }, time);
                 }
                 0x040c_0000 => { // Unmapped {
                     todo!("Unmapped")
@@ -203,11 +203,36 @@ pub enum CpuLength {
 }
 
 pub struct CpuReadFinished {
-    pub length: CpuLength,
+    length: CpuLength,
     pub data: [u32; 8]
 }
 
 impl CpuReadFinished {
+    pub fn word(data: u32) -> Self {
+        Self {
+            length: CpuLength::Word,
+            data: [data, 0, 0, 0, 0, 0, 0, 0]
+        }
+    }
+    pub fn dword(data: u64) -> Self {
+        Self {
+            length: CpuLength::Dword,
+            data: [(data >> 32) as u32, data as u32, 0, 0, 0, 0, 0, 0]
+        }
+    }
+    pub fn qword(data: [u32; 4]) -> Self {
+        Self {
+            length: CpuLength::QWord,
+            data: [data[0], data[1], data[2], data[3], 0, 0, 0, 0]
+        }
+    }
+    pub fn octword(data: [u32; 8]) -> Self {
+        Self {
+            length: CpuLength::OctWord,
+            data
+        }
+    }
+
     pub fn length(&self) -> u64 {
         self.length as u64
     }

@@ -61,13 +61,9 @@ impl Handler<CpuRegRead> for SiActor {
         let address = message.address;
         match address {
             0x0480_0000..=0x048f_ffff => {
-                match address & 0x1c {
+                let data = match address & 0x1c {
                     0x00 => { // SI DRAM address
-                        self.outbox.send::<CpuActor>(
-                            CpuReadFinished {
-                                length: CpuLength::Word,
-                                data: [self.dram_address, 0, 0, 0, 0, 0, 0, 0]
-                            }, time);
+                        self.dram_address
                     }
                     0x04 => { // SI PIF read64
                         unimplemented!()
@@ -88,7 +84,8 @@ impl Handler<CpuRegRead> for SiActor {
                         unimplemented!()
                     }
                     _ => unreachable!()
-                }
+                };
+                self.outbox.send::<CpuActor>(CpuReadFinished::word(data), time.add(4));
             }
             0x1fc0_0000..=0x1fc0_07ff => { // PIF ROM/RAM
                 let pif_address = (address >> 2) as u16 & 0x1ff;
@@ -168,10 +165,8 @@ impl Handler<BusAccept> for SiActor {
         self.state = match self.state {
             SiState::CpuRead => {
                 self.outbox.send::<CpuActor>(
-                    CpuReadFinished {
-                        length: CpuLength::Word,
-                        data: [self.buffer[15], 0, 0, 0, 0, 0, 0, 0]
-                    }, time);
+                    CpuReadFinished::word(self.buffer[15]),
+                    time);
                 SiState::Idle
             }
             SiState::DmaRead(1) => {
