@@ -210,7 +210,15 @@ impl Core {
                 todo!()
             }
             OutstandingRequestType::UncachedDataRead => {
-                MemoryResponce::UncachedDataRead((mem.data[0] as u64) << 32 | (mem.data[1] as u64))
+                match mem.length() {
+                    1 => {
+                        MemoryResponce::UncachedDataRead(mem.data[0] as u64)
+                    }
+                    2 => {
+                        MemoryResponce::UncachedDataRead((mem.data[0] as u64) << 16 | (mem.data[1] as u64))
+                    }
+                    _ => unreachable!(),
+                }
             }
             OutstandingRequestType::UncachedDataWrite => {
                 MemoryResponce::UncachedDataWrite

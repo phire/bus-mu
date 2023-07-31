@@ -65,7 +65,7 @@ impl CpuActor {
         }
 
         let limit_64: u64 = limit.into();
-        println!("CpuActor::advance({})", limit_64);
+        //println!("CpuActor::advance({})", limit_64);
         let mut commit_time_64: u64 = self.committed_time.into();
         let cycles: u64 = limit_64 - commit_time_64;
         let mut odd = commit_time_64 & 1u64;
@@ -131,8 +131,6 @@ impl Handler<BusAccept> for CpuActor {
     fn recv(&mut self, _: BusAccept, time: Time, _limit: Time) {
         let reason = self.outstanding_mem_request.take().unwrap();
         let address = reason.address();
-
-        println!("Cpu bus");
 
         match address & 0xfff0_0000 {
             0x0000_0000..=0x03ff_ffff => { // RDRAM
