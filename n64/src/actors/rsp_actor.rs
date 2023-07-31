@@ -1,6 +1,6 @@
 
 use actor_framework::*;
-use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite}};
+use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite, WriteFinished}};
 
 pub struct RspActor {
     outbox: RspOutbox,
@@ -11,7 +11,8 @@ pub struct RspActor {
 make_outbox!(
     RspOutbox<N64Actors, RspActor> {
         cpu: ReadFinished,
-\    }
+        cpu_w: WriteFinished,
+    }
 );
 
 impl Default for RspActor {
@@ -53,9 +54,11 @@ impl Handler<CpuRegRead> for RspActor {
                 todo!("SP_DMA_WRLEN")
             }
             0x0404_0010 => { // SP_STATUS
+                let data = (self.dma_busy as u32) << 2 |
+                    (self.halted as u32) << 0;
+                println!("RSP read SP_STATUS = {:#010x}", data);
                 // todo: remaining bits
-                (self.dma_busy as u32) << 2 |
-                (self.halted as u32) << 0
+                data
             }
             0x0404_0014 => { // SP_DMA_FULL
                 todo!("SP_DMA_FULL")
@@ -66,7 +69,86 @@ impl Handler<CpuRegRead> for RspActor {
             0x0404_001c => { // SP_SEMAPHORE
                 todo!("SP_SEMAPHORE")
             }
+            _ => unimplemented!()
+        };
         self.outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
+    }
+}
 
+/// Converts 16bit binary ?a?b_?c?d_?e?f_?g?h to 8 bit binary abcd_efgh
+fn deinterlave8(mut data: u32) -> u32 {
+    data &= 0x5555;
+    data = (data | data >> 1) & 0x3333;
+    data = (data | data >> 2) & 0x0f0f;
+    (data | data >> 4) & 0x00ff
+}
+
+impl Handler<CpuRegWrite> for RspActor {
+    fn recv(&mut self, message: CpuRegWrite, time: Time, _limit: Time) {
+        let data = message.data;
+        match message.address {
+            0x0404_0000 => { // SP_DMA_SPADDR
+                todo!("SP_DMA_SPADDR")
+            }
+            0x0404_0004 => { // SP_DMA_RAMADDR
+                todo!("SP_DMA_RAMADDR")
+            }
+            0x0404_0008 => { // SP_DMA_RDLEN
+                todo!("SP_DMA_RDLEN")
+            }
+            0x0404_000c => { // SP_DMA_WRLEN
+                todo!("SP_DMA_WRLEN")
+            }
+            0x0404_0010 => { // SP_STATUS
+                println!("RSP write SP_STATUS = {:#010x}", data);
+                // todo: remaining bits
+                if data & 0x0000_0001 != 0 {
+                    self.halted = false;
+                    println!("  Clear Halt");
+                }
+                if data & 0x0000_0002 != 0 {
+                    self.halted = true;
+                    println!("  Set Halt");
+                }
+                if data & 0x0000_0004 != 0 {
+                    println!("  Clear Broke");
+                }
+                if data & 0x0000_0008 != 0 {
+                    println!("  Clear Interrupt");
+                }
+                if data & 0x0000_0010 != 0 {
+                    println!("  Set Interrupt");
+                }
+                if data & 0x0000_0020 != 0 {
+                    println!("  Clear Single Step");
+                }
+                if data & 0x0000_0040 != 0 {
+                    println!("  Set Single Step");
+                }
+                if data & 0x0000_0080 != 0 {
+                    println!("  Clear Intr On Break");
+                }
+                if data & 0x0000_0100 != 0 {
+                    println!("  Set Intr On Break");
+                }
+                if data & 0x00aa_aa00 != 0 {
+                    println!("  Clear Signal {:#02x}", deinterlave8(data >> 9));
+                }
+                if data & 0x0155_5400 != 0 {
+                    println!("  Set Signal {:#02x}", deinterlave8(data >> 10));
+                }
+            }
+            0x0404_0014 => { // SP_DMA_FULL
+                todo!("SP_DMA_FULL")
+            }
+            0x0404_0018 => { // SP_DMA_BUSY
+                todo!("SP_DMA_BUSY")
+            }
+            0x0404_001c => { // SP_SEMAPHORE
+                todo!("SP_SEMAPHORE")
+            }
+            _ => unimplemented!()
+        };
+        self.outbox.send::<CpuActor>(WriteFinished::word(), time.add(4))
     }
 }

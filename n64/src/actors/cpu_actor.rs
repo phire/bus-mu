@@ -149,8 +149,16 @@ impl Handler<BusAccept> for CpuActor {
                 0x0400_0000 if address & 0x1000 != 0 => { // IMEM Direct access
                     todo!("RSP IMEM")
                 }
-                0x0404_0000 | 0x0408_0000 => { // RSP Registers
-                    self.outbox.send::<RspActor>(CpuRegRead { address: address }, time);
+                0x0404_0000 | 0x0408_0000 => { // RSP Register
+                    match reason {
+                        vr4300::Reason::BusRead32(address) => {
+                            self.outbox.send::<RspActor>(CpuRegRead { address: address }, time);
+                        }
+                        vr4300::Reason::BusWrite32(address, data) => {
+                            self.outbox.send::<RspActor>(CpuRegWrite { address: address, data: data }, time);
+                        }
+                        _ => { panic!("unexpected bus operation for RSP register") }
+                    }
                 }
                 0x040c_0000 => { // Unmapped {
                     todo!("Unmapped")
