@@ -356,7 +356,9 @@ impl Pipeline {
 
         match rf.ex_mode {
             ExMode::Jump => {
-                ex.next_pc = rf.temp;
+                // This looks sus...
+                // Why do relative jumps not need a subtract?
+                ex.next_pc = rf.temp - 4;
             }
             ExMode::Branch(cmp) => {
                 if Self::compare(cmp, rf.alu_a, rf.alu_b) {
