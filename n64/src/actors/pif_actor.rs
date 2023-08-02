@@ -88,6 +88,7 @@ impl PifActor {
     }
 
     fn write(&mut self, data: u32) {
+        println!("PIF: RCP Write {:08x} to {:04x}", data, self.addr);
         if self.addr >= (512 - 16) {
             self.pif_mem[self.addr as usize] = data;
         }
@@ -120,6 +121,7 @@ impl Handler<SiPacket> for PifActor {
                         (pif::Dir::Read, pif::Size::Size64)
                     }
                     SiPacket::Write4(addr) => {
+                        println!("PIF: Write4 {:04x}", addr);
                         self.addr = addr;
                         self.state = PifState::WaitData;
                         self.burst = false;
@@ -149,9 +151,12 @@ impl Handler<SiPacket> for PifActor {
                     self.state = PifState::WaitCmd;
                     self.read(time);
                 }
-                _ => panic!("Unexpected message "),
+                _ => panic!("Unexpected message {:?}", message),
             }
-            PifState::WaitData => match message {
+            PifState::WaitData => {
+
+                println!("PIF: Waitdata {:?}", message);
+                match message {
                 SiPacket::Data4(data) => {
                     self.write(data);
                     self.outbox.send::<SiActor>(SiPacket::Ack, time);
@@ -162,7 +167,8 @@ impl Handler<SiPacket> for PifActor {
                     }
                     self.outbox.send::<SiActor>(SiPacket::Ack, time);
                 }
-                _ => panic!("Unexpected message"),
+                _ => panic!("Unexpected message {:?}", message),
+            }
             }
         }
 
