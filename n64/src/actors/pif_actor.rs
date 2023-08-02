@@ -173,7 +173,7 @@ impl Handler<SiPacket> for PifActor {
 fn calc_address(address: u32) -> (usize, usize) {
     debug_assert!(address < 0x40, "Address {:x} is out of range", address);
     let word_offset = (512 - 16) + (address >> 2);
-    let shift = (address & 0x3) * 8;
+    let shift = 31 - (address & 0x3) * 8;
     (word_offset as usize, shift as usize)
 }
 

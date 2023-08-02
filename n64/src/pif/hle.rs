@@ -22,6 +22,7 @@ use actor_framework::Time;
 
 use super::{Dir, Size};
 
+#[derive(Debug)]
 enum State {
     Init,
     WaitLockout,
@@ -107,6 +108,7 @@ impl PifHle {
 
     pub fn main(&mut self, io: &mut dyn PifIO, time: Time) -> Time{
         let next_time = time.add(13653);
+        println!("PIF: main {:?} {:?}", self.state, time);
 
         match self.state {
 
