@@ -9,8 +9,9 @@ pub mod pi_actor;
 pub mod vi_actor;
 pub mod ai_actor;
 
-#[derive(Named, PartialEq, Eq, Copy, Clone, Debug)]
-#[named(base(Actor))]
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+#[derive(Named)]
+#[named(base(Actor), exit_reason(std::error::Error))]
 pub enum N64Actors {
     #[named(class(cpu_actor::CpuActor))]
     CpuActor,

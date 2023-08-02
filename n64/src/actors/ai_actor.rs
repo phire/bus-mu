@@ -38,7 +38,7 @@ impl Actor<N64Actors> for AiActor {
 }
 
 impl Handler<CpuRegWrite> for AiActor {
-    fn recv(&mut self, message: CpuRegWrite, time: Time, _limit: Time) {
+    fn recv(&mut self, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
         let data = message.data;
         match message.address & 0x1c {
             0x00 => { // AI_DRAM_ADDR
@@ -68,11 +68,12 @@ impl Handler<CpuRegWrite> for AiActor {
             _ => unreachable!()
         }
         self.outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
+        SchedulerResult::Ok
     }
 }
 
 impl Handler<CpuRegRead> for AiActor {
-    fn recv(&mut self, message: CpuRegRead, time: Time, _limit: Time) {
+    fn recv(&mut self, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
         let data = match message.address & 0x1c {
             0x00 => { // AI_DRAM_ADDR
                 println!("read AI_DRAM_ADDR");
@@ -106,5 +107,6 @@ impl Handler<CpuRegRead> for AiActor {
             _ => unreachable!()
         };
         self.outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
+        SchedulerResult::Ok
     }
 }

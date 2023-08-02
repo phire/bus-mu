@@ -11,6 +11,8 @@ pub trait MakeNamed : From<usize> + Into<usize> + PartialEq + Copy + 'static + s
 {
     const COUNT: usize;
     type Base : Named<Self> + ?Sized;
+    type ExitReason = Box<dyn std::error::Error>;
+
     //type Storage = Box<Self::Super>;
     fn iter() -> NamedIterator<Self> where Self: Sized, Self: From<usize> {
         NamedIterator {

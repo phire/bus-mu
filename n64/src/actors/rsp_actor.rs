@@ -43,7 +43,7 @@ impl Actor<N64Actors> for RspActor {
 }
 
 impl Handler<CpuRegRead> for RspActor {
-    fn recv(&mut self, message: CpuRegRead, time: Time, _limit: Time) {
+    fn recv(&mut self, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
         let address = message.address;
         let data = match address {
             0x0404_0000 => { // SP_DMA_SPADDR
@@ -77,6 +77,7 @@ impl Handler<CpuRegRead> for RspActor {
             _ => unimplemented!()
         };
         self.outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
+        SchedulerResult::Ok
     }
 }
 
@@ -89,7 +90,7 @@ fn deinterlave8(mut data: u32) -> u32 {
 }
 
 impl Handler<CpuRegWrite> for RspActor {
-    fn recv(&mut self, message: CpuRegWrite, time: Time, _limit: Time) {
+    fn recv(&mut self, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
         let data = message.data;
         match message.address {
             0x0404_0000 => { // SP_DMA_SPADDR
@@ -154,7 +155,8 @@ impl Handler<CpuRegWrite> for RspActor {
             }
             _ => unimplemented!()
         };
-        self.outbox.send::<CpuActor>(WriteFinished::word(), time.add(4))
+        self.outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
+        SchedulerResult::Ok
     }
 }
 
@@ -167,21 +169,24 @@ pub(super) struct TransferMemOwnership {
 }
 
 impl Handler<TransferMemOwnership> for RspActor {
-    fn recv(&mut self, message: TransferMemOwnership, _time: Time, _limit: Time) {
+    fn recv(&mut self, message: TransferMemOwnership, _time: Time, _limit: Time) -> SchedulerResult {
         self.imem = Some(message.imem);
         self.dmem = Some(message.dmem);
 
         // TODO: If the RSP is running, we need to continue it
+        SchedulerResult::Ok
     }
 }
 
 impl Handler<ReqestMemOwnership> for RspActor {
-    fn recv(&mut self, _message: ReqestMemOwnership, time: Time, _limit: Time) {
+    fn recv(&mut self, _message: ReqestMemOwnership, time: Time, _limit: Time) -> SchedulerResult {
         // TODO: calculate timings for when RSP is busy
         // TODO: Handle cases where the RSP DMA is active (which apparently corrupts CPU accesses)
         self.outbox.send::<CpuActor>(TransferMemOwnership {
             imem: self.imem.take().unwrap(),
             dmem: self.dmem.take().unwrap(),
         }, time);
+
+        SchedulerResult::Ok
     }
 }

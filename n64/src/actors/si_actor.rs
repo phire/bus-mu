@@ -1,5 +1,5 @@
 
-use actor_framework::{Time, Actor, MessagePacketProxy, Handler, Outbox, OutboxSend};
+use actor_framework::{Time, Actor, MessagePacketProxy, Handler, Outbox, OutboxSend, SchedulerResult};
 
 use super::{N64Actors, bus_actor::{BusAccept, BusRequest, BusActor}, cpu_actor::{CpuRegRead, CpuActor, ReadFinished, CpuRegWrite}, pif_actor::PifActor};
 
@@ -50,7 +50,7 @@ impl SiActor {
 }
 
 impl Handler<CpuRegRead> for SiActor {
-    fn recv(&mut self, message: CpuRegRead, time: Time, limit: Time) {
+    fn recv(&mut self, message: CpuRegRead, time: Time, limit: Time) -> SchedulerResult {
         match self.state {
             SiState::Idle => {}
             // HWTEST: What should happen when SI is busy?
@@ -106,11 +106,12 @@ impl Handler<CpuRegRead> for SiActor {
             }
             _ => { unreachable!() }
         }
+        SchedulerResult::Ok
     }
 }
 
 impl Handler<CpuRegWrite> for SiActor {
-    fn recv(&mut self, message: CpuRegWrite, time: Time, limit: Time) {
+    fn recv(&mut self, message: CpuRegWrite, time: Time, limit: Time) -> SchedulerResult {
         unimplemented!("SiActor::CpuRegWrite")
     }
 }
@@ -128,14 +129,15 @@ pub enum SiPacket {
 
 // Handle responses from PIF
 impl Handler<SiPacket> for SiActor {
-    fn recv(&mut self, message: SiPacket, time: Time, _limit: Time) {
+    fn recv(&mut self, message: SiPacket, time: Time, _limit: Time) -> SchedulerResult {
         let req_time;
         match message {
             SiPacket::Ack => { // PIF ready to receive our write data
                 req_time = time.add(4);
                 match self.state {
                     SiState::CpuRead | SiState::DmaRead(_) => {
-                        return self.outbox.send::<PifActor>(SiPacket::Ack, req_time);
+                        self.outbox.send::<PifActor>(SiPacket::Ack, req_time);
+                        return SchedulerResult::Ok;
                     }
                     _ => {}
                 }
@@ -153,7 +155,9 @@ impl Handler<SiPacket> for SiActor {
             }
             _ => panic!("Invalid message")
         }
-        return self.bus_request(req_time);
+        self.bus_request(req_time);
+
+        SchedulerResult::Ok
     }
 }
 
@@ -166,7 +170,7 @@ enum SiState {
 }
 
 impl Handler<BusAccept> for SiActor {
-    fn recv(&mut self, _: BusAccept, time: Time, _limit: Time) {
+    fn recv(&mut self, _: BusAccept, time: Time, _limit: Time) -> SchedulerResult {
         //let time = time.add(4 * 32);
         self.state = match self.state {
             SiState::CpuRead => {
@@ -205,6 +209,7 @@ impl Handler<BusAccept> for SiActor {
                 unreachable!()
             }
         };
+        SchedulerResult::Ok
     }
 }
 

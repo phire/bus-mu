@@ -1,6 +1,8 @@
 // FIXME: can we do it without this?
 #![feature(generic_const_exprs)]
 
+#![feature(associated_type_defaults)]
+
 mod addr;
 mod channel;
 mod message_packet;
@@ -17,7 +19,7 @@ pub use named_derive::Named;
 pub use time::Time;
 pub use message_packet::{MessagePacket, MessagePacketProxy};
 pub use message_packet::{Outbox, OutboxSend};
-pub use scheduler::Scheduler;
+pub use scheduler::{Scheduler, SchedulerResult};
 pub use enum_map::EnumMap;
 
 pub trait Actor<ActorNames> : Named<ActorNames>
@@ -29,6 +31,7 @@ where
     fn message_delivered(&mut self, time: Time);
 }
 
-pub trait Handler<M> where {
-    fn recv(&mut self, message: M, time: Time, limit: Time);
+pub trait Handler<M>
+{
+    fn recv(&mut self, message: M, time: Time, limit: Time) -> SchedulerResult;
 }

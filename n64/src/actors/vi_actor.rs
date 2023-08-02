@@ -32,7 +32,7 @@ impl Actor<N64Actors> for ViActor {
 }
 
 impl Handler<CpuRegWrite> for ViActor {
-    fn recv(&mut self, message: CpuRegWrite, time: Time, _limit: Time) {
+    fn recv(&mut self, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
         let data = message.data;
         match message.address & 0x3c {
             0x00 => { // VI_CTRL
@@ -86,11 +86,12 @@ impl Handler<CpuRegWrite> for ViActor {
             _ => unreachable!()
         }
         self.outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
+        SchedulerResult::Ok
     }
 }
 
 impl Handler<CpuRegRead> for ViActor {
-    fn recv(&mut self, message: CpuRegRead, time: Time, _limit: Time) {
+    fn recv(&mut self, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
         let data = match message.address & 0x3c {
             0x00 => { // VI_CTRL
                 todo!("VI read VI_CTRL");

@@ -1,11 +1,11 @@
-use crate::{MakeNamed, Time, MessagePacket, Handler, Addr, Named};
+use crate::{MakeNamed, Time, MessagePacket, Handler, Addr, Actor};
 
 impl<A, ActorNames> Addr<A, ActorNames>
  where ActorNames: MakeNamed,
 [(); ActorNames::COUNT]:
 {
     pub fn make_channel<M>(&self) -> Channel<M, ActorNames>
-    where A : Handler<M> + Named<ActorNames>,
+    where A : Handler<M> + Actor<ActorNames>,
           M: 'static,
           <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
     {
@@ -35,7 +35,7 @@ impl<M, Name> Channel<M, Name>
 }
 
 fn channel_fn<A, M, Name>(time: Time, message: M) -> MessagePacket<Name, M>
-where A: Handler<M> + Named<Name>,
+where A: Handler<M> + Actor<Name>,
       M: 'static,
       Name: MakeNamed,
       <Name as MakeNamed>::Base: crate::Actor<Name>,

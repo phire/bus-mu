@@ -1,7 +1,7 @@
 
 /// CpuActor: Emulates the CPU and MI (Mips Interface)
 
-use actor_framework::{Actor, Time, Handler, Outbox, OutboxSend};
+use actor_framework::{Actor, Time, Handler, Outbox, OutboxSend, SchedulerResult};
 use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor, pi_actor::PiActor, vi_actor::ViActor, ai_actor::AiActor};
 
 use crate::{vr4300, actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::{RspActor, self}}};
@@ -71,6 +71,7 @@ impl CpuActor {
         //println!("CpuActor::advance({})", limit_64);
         let mut commit_time_64: u64 = self.committed_time.into();
         let cycles: u64 = limit_64 - commit_time_64;
+
         let mut odd = commit_time_64 & 1u64;
 
         let mut cpu_cycles = to_cpu_time(cycles, odd);
@@ -120,9 +121,17 @@ impl Actor<N64Actors> for CpuActor {
 }
 
 impl Handler<CpuRun> for CpuActor {
-    fn recv(&mut self, _: CpuRun, time: Time, limit: Time) {
+    fn recv(&mut self, _: CpuRun, time: Time, limit: Time) -> SchedulerResult {
+        if time == limit {
+            self.outbox.send::<CpuActor>(CpuRun {}, time);
+
+            // Let the scheduler know we are zero limited
+            return SchedulerResult::ZeroLimit;
+        }
         self.committed_time = time;
         self.advance(limit);
+
+        SchedulerResult::Ok
     }
 }
 
@@ -163,11 +172,11 @@ impl CpuActor {
             match reason {
                 vr4300::Reason::BusRead32(_) => {
                     let data = mem[offset];
-                    self.recv(ReadFinished::word(data), time, time)
+                    self.recv(ReadFinished::word(data), time, time);
                 }
                 vr4300::Reason::BusWrite32(_, data) => {
                     mem[offset] = data;
-                    self.recv(WriteFinished::word(), time, time)
+                    self.recv(WriteFinished::word(), time, time);
                 }
                 _ => { panic!("unexpected bus operation") }
             }
@@ -180,7 +189,7 @@ impl CpuActor {
 }
 
 impl Handler<BusAccept> for CpuActor {
-    fn recv(&mut self, _: BusAccept, time: Time, _limit: Time) {
+    fn recv(&mut self, _: BusAccept, time: Time, _limit: Time) -> SchedulerResult {
         let reason = self.outstanding_mem_request.take().unwrap();
         let address = reason.address();
 
@@ -243,6 +252,7 @@ impl Handler<BusAccept> for CpuActor {
             }
             _ => unreachable!()
         }
+        SchedulerResult::Ok
     }
 }
 
@@ -291,10 +301,11 @@ impl ReadFinished {
 }
 
 impl Handler<ReadFinished> for CpuActor {
-    fn recv(&mut self, message: ReadFinished, time: Time, _limit: Time) {
+    fn recv(&mut self, message: ReadFinished, time: Time, _limit: Time) -> SchedulerResult {
         // It takes length cycles to send the data across the SysAD bus
         self.outbox.send::<CpuActor>(CpuRun{}, time.add(message.length()));
         self.cpu_core.finish_read(message);
+        SchedulerResult::Ok
     }
 }
 
@@ -330,29 +341,34 @@ impl WriteFinished {
 }
 
 impl Handler<WriteFinished> for CpuActor {
-    fn recv(&mut self, message: WriteFinished, time: Time, _limit: Time) {
+    fn recv(&mut self, message: WriteFinished, time: Time, _limit: Time) -> SchedulerResult {
         // It takes length cycles to send the data across the SysAD bus
         self.outbox.send::<CpuActor>(CpuRun{}, time.add(1));
         self.cpu_core.finish_write(message);
+        SchedulerResult::Ok
     }
 }
 
 impl Handler<rsp_actor::TransferMemOwnership> for CpuActor {
-    fn recv(&mut self, message: rsp_actor::TransferMemOwnership, time: Time, _limit: Time) {
+    fn recv(&mut self, message: rsp_actor::TransferMemOwnership, time: Time, _limit: Time) -> SchedulerResult {
         self.imem = Some(message.imem);
         self.dmem = Some(message.dmem);
 
         // We can now complete the memory request to imem or dmem
         let reason = self.outstanding_mem_request.take().unwrap();
-        self.do_rspmem(reason, time)
+        self.do_rspmem(reason, time);
+
+        SchedulerResult::Ok
     }
 }
 
 impl Handler<rsp_actor::ReqestMemOwnership> for CpuActor {
-    fn recv(&mut self, _message: rsp_actor::ReqestMemOwnership, time: Time, _limit: Time) {
+    fn recv(&mut self, _message: rsp_actor::ReqestMemOwnership, time: Time, _limit: Time) -> SchedulerResult {
         self.outbox.send::<RspActor>(rsp_actor::TransferMemOwnership {
             imem: self.imem.take().unwrap(),
             dmem: self.imem.take().unwrap(),
         }, time.add(4));
+
+        SchedulerResult::Ok
     }
 }

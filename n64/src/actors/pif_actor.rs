@@ -1,7 +1,7 @@
 /// PifActor: Emulates the SI (Serial Interface) and the connected PIF
 
 
-use actor_framework::{Actor, Time, Handler, make_outbox, Outbox, OutboxSend};
+use actor_framework::{Actor, Time, Handler, make_outbox, Outbox, OutboxSend, SchedulerResult};
 use super::{N64Actors, si_actor::{SiPacket, SiActor}};
 
 use crate::{pif, cic};
@@ -75,6 +75,7 @@ impl PifActor {
         match self.burst {
             false => {
                 let data = self.read_word(self.addr as usize);
+                println!("PIF: Read {:08x} from {:04x}", data, self.addr);
                 self.outbox.send::<SiActor>(SiPacket::Data4(data), time);
             }
             true => {
@@ -101,7 +102,7 @@ enum PifState {
 }
 
 impl Handler<SiPacket> for PifActor {
-    fn recv(&mut self, message: SiPacket, time: Time, _limit: Time) {
+    fn recv(&mut self, message: SiPacket, time: Time, _limit: Time) -> SchedulerResult {
         match self.state {
             PifState::WaitCmd => {
 
@@ -132,37 +133,40 @@ impl Handler<SiPacket> for PifActor {
                     }
                     _ => panic!("Unexpected message"),
                 };
-                // HWTEST: UltraPIF inserts a 4 cycle delay here
-                //         But n64-systembench indicates it's more like 1800 cycles
-                //         This is chaotic, caused by how long it takes for the sm5 core to respond
-                //         to an interrupt and halt
 
                 let (pif_core, mut io) = PifHleIoProxy::split(self);
                 pif_core.interrupt_a(&mut io, dir, size);
 
-                return self.outbox.send::<SiActor>(SiPacket::Ack, time.add(450 * 4))
+
+                // HWTEST: UltraPIF inserts a 4 cycle delay here
+                //         But n64-systembench indicates it's more like 1800 cycles
+                //         This is chaotic, caused by how long it takes for the sm5 core to respond
+                //         to an interrupt and halt
+                self.outbox.send::<SiActor>(SiPacket::Ack, time.add(450 * 4))
             }
             PifState::WaitAck => match message {
                 SiPacket::Ack => {
                     self.state = PifState::WaitCmd;
-                    return self.read(time);
+                    self.read(time);
                 }
                 _ => panic!("Unexpected message "),
             }
             PifState::WaitData => match message {
                 SiPacket::Data4(data) => {
                     self.write(data);
-                    return self.outbox.send::<SiActor>(SiPacket::Ack, time);
+                    self.outbox.send::<SiActor>(SiPacket::Ack, time);
                 }
                 SiPacket::Data64(data) => {
                     for (i, d) in data.iter().enumerate() {
                         self.write(*d);
                     }
-                    return self.outbox.send::<SiActor>(SiPacket::Ack, time);
+                    self.outbox.send::<SiActor>(SiPacket::Ack, time);
                 }
                 _ => panic!("Unexpected message"),
             }
         }
+
+        SchedulerResult::Ok
     }
 }
 
@@ -236,9 +240,11 @@ impl pif::PifIO for PifHleIoProxy<'_> {
 struct PifHleMain {}
 
 impl Handler<PifHleMain> for PifActor {
-    fn recv(&mut self, _: PifHleMain, time: Time, _: Time) {
+    fn recv(&mut self, _: PifHleMain, time: Time, _: Time) -> SchedulerResult {
         let (pif_core, mut io) = PifHleIoProxy::split(self);
 
         self.pif_time = pif_core.main(&mut io, time);
+
+        SchedulerResult::Ok
     }
 }

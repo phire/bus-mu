@@ -2,8 +2,9 @@
 
 use std::mem::{MaybeUninit, ManuallyDrop};
 
-use crate::{object_map::ObjectStore, MakeNamed, Time, Handler, Named, Actor, Addr, Channel};
+use crate::{object_map::ObjectStore, MakeNamed, Time, Handler, Actor, Addr, Channel, SchedulerResult};
 
+type ExecuteFn<ActorNames> = fn(sender_id: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -14,7 +15,7 @@ where
 {
 
     pub time: Time,
-    pub(crate) execute_fn: Option<fn(sender_id: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time)>,
+    pub(crate) execute_fn: Option<ExecuteFn<ActorNames>>,
 }
 
 #[repr(C)]
@@ -24,14 +25,14 @@ where
     [(); ActorNames::COUNT]: ,
 {
     pub time: Time,
-    pub(crate) execute_fn: Option<fn(sender_id: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time)>,
+    pub(crate) execute_fn: Option<ExecuteFn<ActorNames>>,
     //actor_name: ActorNames,
     data: MaybeUninit<ManuallyDrop<Message>>,
 }
 
-fn direct_execute<ActorNames, Sender, Receiver, Message>(_: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time)
+fn direct_execute<ActorNames, Sender, Receiver, Message>(_: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
 where
-    Receiver: Handler<Message> + Named<ActorNames>,
+    Receiver: Handler<Message> + Actor<ActorNames>,
     Sender: crate::Actor<ActorNames>,
     ActorNames: MakeNamed,
     [(); ActorNames::COUNT]: ,
@@ -46,13 +47,15 @@ where
 
     //println!("direct_execute: {:?} {:?}", Receiver::name(), time);
 
-    map.get::<Receiver>().recv(message, time, limit);
+    let result = map.get::<Receiver>().recv(message, time, limit);
     map.get::<Sender>().message_delivered(time);
+
+    result
 }
 
-fn channel_execute<ActorNames, Receiver, Message>(sender_id: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time)
+fn channel_execute<ActorNames, Receiver, Message>(sender_id: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
 where
-    Receiver: Handler<Message> + Named<ActorNames>,
+    Receiver: Handler<Message> + Actor<ActorNames>,
     ActorNames: MakeNamed,
     <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
     [(); ActorNames::COUNT]: ,
@@ -65,8 +68,10 @@ where
         packet.take()
     };
 
-    map.get::<Receiver>().recv(message, time, limit);
+    let result = map.get::<Receiver>().recv(message, time, limit);
     map.get_id(sender_id).message_delivered(time);
+
+    result
 }
 
 impl<ActorNames> MessagePacketProxy<ActorNames>
@@ -86,7 +91,7 @@ where
 {
     pub fn new<Sender, Receiver>(time: Time, data: Message) -> Self
     where
-        Receiver: Handler<Message> + Named<ActorNames>,
+        Receiver: Handler<Message> + Actor<ActorNames>,
         Sender: crate::Actor<ActorNames>,
     {
         Self {
@@ -100,7 +105,7 @@ where
 
     pub(crate) fn new_channel<Receiver>(time: Time, data: Message) -> Self
     where
-        Receiver: Handler<Message> + Named<ActorNames>,
+        Receiver: Handler<Message> + Actor<ActorNames>,
         <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
     {
         Self {
@@ -153,10 +158,10 @@ where
 {
     fn send<Receiver>(&mut self, message: Message, time: Time)
     where
-        Receiver: Handler<Message> + Named<ActorNames>;
+        Receiver: Handler<Message> + Actor<ActorNames>;
     fn send_addr<Receiver>(&mut self, addr: &Addr<Receiver, ActorNames>, message: Message, time: Time)
     where
-        Receiver: Handler<Message> + Named<ActorNames>;
+        Receiver: Handler<Message> + Actor<ActorNames>;
     fn send_channel(&mut self, channel: &Channel<Message, ActorNames>, message: Message, time: Time);
 }
 
@@ -213,7 +218,7 @@ macro_rules! make_outbox {
         impl actor_framework::OutboxSend<$name_type, $field_type> for $name {
             fn send<Receiver>(&mut self, message: $field_type, time: Time)
             where
-                Receiver: actor_framework::Handler<$field_type> + actor_framework::Named<$name_type>,
+                Receiver: actor_framework::Handler<$field_type> + actor_framework::Actor<$name_type>,
             {
                 //debug_assert!(self.none.execute_fn.is_none());
 
@@ -223,7 +228,7 @@ macro_rules! make_outbox {
             }
             fn send_addr<Receiver>(&mut self, addr: &actor_framework::Addr<Receiver, $name_type>, message: $field_type, time: Time)
             where
-                Receiver: actor_framework::Handler<$field_type> + actor_framework::Named<$name_type>,
+                Receiver: actor_framework::Handler<$field_type> + actor_framework::Actor<$name_type>,
             {
                 self.send::<Receiver>(message, time);
             }
