@@ -408,6 +408,7 @@ pub enum RfMode {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ExMode {
+    Nop,
     Jump,
     Branch(CmpMode),
     BranchLikely(CmpMode),

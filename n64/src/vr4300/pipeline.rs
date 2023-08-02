@@ -46,14 +46,16 @@ struct DataCache {
     store: bool,
     mem_size: u8,
 }
-// struct WriteBack {}
+struct WriteBack {
+    stalled: bool,
+}
 
 pub struct Pipeline {
     ic: InstructionCache,
     rf: RegisterFile,
     ex: Execute,
     dc: DataCache,
-    //wb: WriteBack,
+    wb: WriteBack,
 }
 
 pub enum MemoryReq
@@ -78,6 +80,7 @@ pub enum MemoryResponce
 pub enum ExitReason
 {
     Ok,
+    Blocked, // All stages are stalled until a memory request is completed
     //Stall(u8),
     Mem(MemoryReq),
 }
@@ -110,6 +113,10 @@ impl Pipeline {
         // So each stage can use the previous stage's output before it's overwritten
         // This also allows us to stall the pipeline by returning early.
 
+        if self.wb.stalled {
+            return ExitReason::Blocked;
+        }
+
         // ==================
         // Stage 5: WriteBack
         // ==================
@@ -129,6 +136,7 @@ impl Pipeline {
                         writeback_value = cache_attempt.read(&dcache, mem_size);
                     }
                 } else {
+                    self.wb.stalled = true;
                     return ExitReason::Mem(cache_attempt.do_miss(&dcache, tlb_tag, self.dc.mem_size, self.dc.store, writeback_value));
                 }
             }
@@ -140,10 +148,16 @@ impl Pipeline {
             }
         }
 
+        let mut writeback_has_work = false;
+
         // ==================
         // Stage 4: DataCache
         // ==================
         {
+            // Clear previous op
+            self.dc.mem_size = 0;
+            self.dc.writeback_reg = 0;
+
             if self.ex.mem_size != 0 {
                 let addr = self.ex.addr;
 
@@ -158,8 +172,10 @@ impl Pipeline {
                 self.dc.writeback_reg = self.ex.writeback_reg;
                 self.dc.store = self.ex.store;
                 self.dc.mem_size = self.ex.mem_size;
+                writeback_has_work = true;
             }
         }
+
         // ================
         // Stage 3: Execute
         // ================
@@ -168,7 +184,7 @@ impl Pipeline {
             if self.rf.stalled {
                 self.ex.mem_size = 0;
                 self.ex.writeback_reg = 0;
-                return ExitReason::Ok;
+                return if writeback_has_work { ExitReason::Ok } else { ExitReason::Blocked };
             }
 
             if self.ex.skip_next || regfile.hazard_detected() {
@@ -201,11 +217,7 @@ impl Pipeline {
 
             if !self.ic.expected_tag.is_valid() {
                 // ITLB missed. We need to query the Joint-TLB for a result
-                if self.ic.expected_tag == CacheTag::empty() {
-                    // Umm.... FIXME!
-                } else {
-                    todo!("JTLB lookup");
-                }
+                todo!("JTLB lookup");
                 //return ExitReason::Ok;
             } else if self.ic.cache_tag != self.ic.expected_tag {
                 self.rf.stalled = true;
@@ -252,9 +264,10 @@ impl Pipeline {
 
         if let InstructionInfo::Op(_, _, _, rf_mode, ex_mode) = *inst_info {
             rf.ex_mode = ex_mode;
-            //println!("RF: {:?}", rf_mode);
+            println!("RF: {:?}", rf_mode);
             match rf_mode {
-                // PERF: Maybe this can be simplified down to just a few flags
+                // PERF: This could be simplified down to just a few flags
+                //       But would that be faster than the jump table this compiles to?
                 RfMode::JumpImm => {
                     let upper_bits = rf.next_pc & 0xffff_ffff_f000_0000;
                     rf.temp = (j.target() as u64) << 2 | upper_bits;
@@ -347,20 +360,27 @@ impl Pipeline {
     }
 
     fn run_ex_phase1(rf: &RegisterFile, ex: &mut Execute, hilo: &mut [u64; 2]) {
+        let old_pc = ex.next_pc;
         ex.next_pc = rf.next_pc;
         ex.trap = false;
         ex.mem_size = 0;
         ex.writeback_reg = rf.writeback_reg;
 
-        //println!("EX: {:?}", rf.ex_mode);
+        println!("EX: {:?}", rf.ex_mode);
 
         match rf.ex_mode {
+            ExMode::Nop => {
+                ex.writeback_reg = 0;
+                ex.next_pc = old_pc;
+            }
             ExMode::Jump => {
                 // This looks sus...
                 // Why do relative jumps not need a subtract?
                 ex.next_pc = rf.temp - 4;
             }
             ExMode::Branch(cmp) => {
+                // PERF: Check the compiler will automatically duplicate this case?
+                //       Or should we be doing that optimization manually?
                 if Self::compare(cmp, rf.alu_a, rf.alu_b) {
                     ex.next_pc = rf.temp;
                 }
@@ -580,9 +600,11 @@ impl Pipeline {
                 self.ic.cache_data = word;
                 self.ic.cache_tag = self.ic.expected_tag;
                 self.rf.stalled = false;
+                self.rf.ex_mode = ExMode::Nop;
             }
             MemoryResponce::DCacheFill(data) => {
                 self.dc.cache_attempt.finish_fill(dcache, self.dc.tlb_tag, data);
+                self.wb.stalled = false;
             }
             MemoryResponce::UncachedDataRead(value) => {
                 if self.dc.writeback_reg != 0 {
@@ -591,9 +613,11 @@ impl Pipeline {
                     self.dc.writeback_reg = 0;
                 }
                 self.dc.mem_size = 0;
+                self.wb.stalled = false;
             }
             MemoryResponce::UncachedDataWrite => {
                 self.dc.mem_size = 0;
+                self.wb.stalled = false;
             }
         }
     }
@@ -601,14 +625,18 @@ impl Pipeline {
 }
 
 pub fn create() -> Pipeline {
+    let reset_pc = 0xffff_ffff_bfc0_0000;
+
     Pipeline{
         ic: InstructionCache{
             cache_data: 0,
             cache_tag: CacheTag::empty(),
-            expected_tag: CacheTag::empty(),
+            // Start with the first instruction fetch already started.
+            // Otherwise the RF stage will incorrectly start a ITLB miss on the first cycle
+            expected_tag: CacheTag::new_uncached(reset_pc as u32 & 0x1fff_ffff),
         },
         rf: RegisterFile{
-            next_pc: 0xffff_ffff_bfc0_0000,
+            next_pc: reset_pc,
             alu_a: 0,
             alu_b: 0,
             temp: 0,
@@ -636,6 +664,8 @@ pub fn create() -> Pipeline {
             store: false,
             mem_size: 0,
         },
-        //wb: WriteBack{},
+        wb: WriteBack{
+            stalled: false,
+        },
     }
 }

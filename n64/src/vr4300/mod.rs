@@ -10,8 +10,6 @@ use pipeline::{MemoryReq, ExitReason};
 use regfile::RegFile;
 use pipeline::Pipeline;
 
-use crate::actors::cpu_actor::{ReadFinished, WriteFinished};
-
 use self::pipeline::MemoryResponce;
 
 pub mod instructions;
@@ -22,80 +20,15 @@ pub mod microtlb;
 pub mod joint_tlb;
 pub mod regfile;
 
-pub fn test() {
-    let pif_rom = std::fs::read("pifdata.bin").unwrap();
 
-    let mut pipeline = pipeline::create();
-    let mut icache = ICache::new();
-    let mut dcache = DCache::new();
-
-    let mut itlb = ITlb::new();
-
-    let mut regfile = RegFile::new();
-
-    for i in 0..128 {
-        println!("    cycle: {:3}, PC:{:08x}", i, pipeline.pc());
-        let reason = pipeline.cycle(&mut icache, &mut dcache, &mut itlb, &mut regfile);
-
-        match reason {
-            ExitReason::Mem(MemoryReq::ICacheFill(addr)) => {
-                println!("ICache fill: {:08x}", addr);
-            }
-            ExitReason::Mem(MemoryReq::DCacheFill(addr)) => {
-                println!("DCache fill: {:08x}", addr);
-            }
-            ExitReason::Mem(MemoryReq::DCacheReplace(new_addr, old_addr, _data)) => {
-                println!("DCache replace: {:08x} -> {:08x}", old_addr, new_addr);
-            }
-            ExitReason::Mem(MemoryReq::UncachedInstructionRead(addr)) => {
-                let word = match addr {
-                    0x1fc00000..=0x1fc007bf => {
-                        let offset = (addr & 0x7fc) as usize;
-                        let bytes = &pif_rom[offset..(offset + 4)];
-                        u32::from_be_bytes(bytes.try_into().unwrap())
-                    }
-                    _ => panic!("Invalid address: {:08x}", addr),
-                };
-
-                let (inst, _inst_info) = instructions::decode(word);
-                pipeline.memory_responce(pipeline::MemoryResponce::UncachedInstructionRead(word), &mut icache, &mut dcache, &mut regfile);
-                println!("(uncached) {:04x}: {:08x}    {}", addr, word, inst.disassemble(addr as u64));
-                continue;
-            }
-            ExitReason::Mem(MemoryReq::UncachedDataRead(addr, size)) => {
-                println!("Uncached read: {:#08x} ({} bytes)", addr, size);
-                let mut data ;
-                match addr {
-                    0x04040010 => { // SP Status
-                        if i < 40 {
-                            data = 0; // Busy
-                        } else {
-                            data = 1; // Idle
-                        }
-                    }
-                    _ => { todo!(); }
-                }
-                pipeline.memory_responce(pipeline::MemoryResponce::UncachedDataRead(data), &mut icache, &mut dcache, &mut regfile);
-                continue;
-            }
-            ExitReason::Mem(MemoryReq::UncachedDataWrite(addr, size, data)) => {
-                println!("Uncached write: {:08x} ({} bytes) = {:08x}", addr, size, data);
-            }
-            ExitReason::Ok => { continue; }
-        }
-
-        break;
-    }
-}
-
-enum OutstandingRequestType {
-    None,
+#[derive(Copy, Clone, Debug)]
+pub enum RequestType {
     ICacheFill,
     DCacheFill,
-    DCacheReplace,
+    DCacheWriteback,
     UncachedInstructionRead,
     UncachedDataRead,
-    UncachedDataWrite,
+    UncachedWrite,
 }
 
 pub struct Core {
@@ -106,18 +39,17 @@ pub struct Core {
     regfile: RegFile,
     //bus: SysADBus,
     queued_flush: Option<(u32, [u8; 16])>,
-    outstanding_request: OutstandingRequestType,
 }
 
 impl Core {
-    pub fn run(&mut self, cycle_limit: u64) -> CoreRunResult {
+    pub fn advance(&mut self, cycle_limit: u64) -> CoreRunResult {
 
         let mut cycles = 0;
 
         if let Some((addr, data)) = self.queued_flush.take() {
             return CoreRunResult {
                 cycles,
-                reason: Reason::BusWrite128(addr, data)
+                reason: Reason::BusWrite128(RequestType::DCacheWriteback, addr, data)
             }
         }
 
@@ -132,45 +64,42 @@ impl Core {
             );
             let reason = match reason {
                 ExitReason::Ok => { continue; }
+                ExitReason::Blocked => {
+                    cycles = cycle_limit;
+                    break;
+                }
                 ExitReason::Mem(MemoryReq::ICacheFill(addr)) => {
                     println!("ICache fill: {:08x}", addr);
-                    self.outstanding_request = OutstandingRequestType::ICacheFill;
-                    Reason::BusRead256(addr)
+                    Reason::BusRead256(RequestType::ICacheFill, addr)
                 }
                 ExitReason::Mem(MemoryReq::DCacheFill(addr)) => {
                     println!("DCache fill: {:08x}", addr);
-                    self.outstanding_request = OutstandingRequestType::DCacheFill;
-                    Reason::BusRead128(addr)
+                    Reason::BusRead128(RequestType::DCacheFill, addr)
                 }
                 ExitReason::Mem(MemoryReq::DCacheReplace(new_addr, old_addr, _data)) => {
                     println!("DCache replace: {:08x} -> {:08x}", old_addr, new_addr);
-                    self.outstanding_request = OutstandingRequestType::DCacheReplace;
-
                     self.queued_flush = Some((old_addr, [0; 16]));
-                    Reason::BusRead128(new_addr)
+                    Reason::BusRead128(RequestType::DCacheFill, new_addr)
                 }
                 ExitReason::Mem(MemoryReq::UncachedInstructionRead(addr)) => {
                     println!("Uncached instruction read: {:08x}", addr);
-                    self.outstanding_request = OutstandingRequestType::UncachedInstructionRead;
-                    Reason::BusRead32(addr)
+                    Reason::BusRead32(RequestType::UncachedInstructionRead, addr)
                 }
                 ExitReason::Mem(MemoryReq::UncachedDataRead(addr, size)) => {
                     println!("Uncached data read: {:08x} ({} bytes)", addr, size);
-                    self.outstanding_request = OutstandingRequestType::UncachedDataRead;
                     match size {
-                        1 | 2 | 4 => Reason::BusRead32(addr),
-                        8 => Reason::BusRead64(addr),
+                        1 | 2 | 4 => Reason::BusRead32(RequestType::UncachedDataRead, addr),
+                        8 => Reason::BusRead64(RequestType::UncachedDataRead, addr),
                         _ => unreachable!(),
                     }
                 }
                 ExitReason::Mem(MemoryReq::UncachedDataWrite(addr, size, data)) => {
                     println!("Uncached data write: {:08x} ({} bytes) = {:08x}", addr, size, data);
-                    self.outstanding_request = OutstandingRequestType::UncachedDataWrite;
                     match size {
-                        1 => Reason::BusWrite8(addr, data as u32),
-                        2 => Reason::BusWrite16(addr, data as u32),
-                        4 => Reason::BusWrite32(addr, data as u32),
-                        8 => Reason::BusWrite64(addr, data),
+                        1 => Reason::BusWrite8(RequestType::UncachedWrite, addr, data as u32),
+                        2 => Reason::BusWrite16(RequestType::UncachedWrite, addr, data as u32),
+                        4 => Reason::BusWrite32(RequestType::UncachedWrite, addr, data as u32),
+                        8 => Reason::BusWrite64(RequestType::UncachedWrite, addr, data),
                         _ => unreachable!(),
                     }
                 }
@@ -192,36 +121,32 @@ impl Core {
         todo!("pipeline.set_time");
     }
 
-    pub fn finish_read(&mut self, mem: ReadFinished ) {
-        let response = match self.outstanding_request {
-            OutstandingRequestType::UncachedInstructionRead => {
-                let word = mem.data[0];
+    pub fn finish_read(&mut self, request_type: RequestType, data: &[u32; 8], length: u64) {
+        let response = match request_type {
+            RequestType::UncachedInstructionRead => {
+                let word = data[0];
                 let (inst, _inst_info) = instructions::decode(word);
                 let addr = self.pipeline.pc();
                 println!("(uncached) {:04x}: {:08x}    {}", addr, word, inst.disassemble(addr as u64));
-                MemoryResponce::UncachedInstructionRead(mem.data[0])
+                MemoryResponce::UncachedInstructionRead(data[0])
             }
-            OutstandingRequestType::DCacheFill => {
+            RequestType::DCacheFill => {
                 todo!()
                 //MemoryResponce::DCacheFill([mem])
             }
-            OutstandingRequestType::DCacheReplace => {
-                //MemoryResponce::DCacheReplace(mem.data)
-                todo!()
-            }
-            OutstandingRequestType::UncachedDataRead => {
-                match mem.length() {
+            RequestType::UncachedDataRead => {
+                match length {
                     1 => {
-                        MemoryResponce::UncachedDataRead(mem.data[0] as u64)
+                        MemoryResponce::UncachedDataRead(data[0] as u64)
                     }
                     2 => {
-                        MemoryResponce::UncachedDataRead((mem.data[0] as u64) << 16 | (mem.data[1] as u64))
+                        MemoryResponce::UncachedDataRead((data[0] as u64) << 16 | (data[1] as u64))
                     }
                     _ => unreachable!(),
                 }
             }
-            OutstandingRequestType::ICacheFill => {
-                MemoryResponce::ICacheFill(mem.data)
+            RequestType::ICacheFill => {
+                MemoryResponce::ICacheFill(*data)
             }
             _ => unreachable!(),
         };
@@ -234,9 +159,9 @@ impl Core {
         )
     }
 
-    pub fn finish_write(&mut self, mem: WriteFinished) {
-        let response = match self.outstanding_request {
-            OutstandingRequestType::UncachedDataWrite => {
+    pub fn finish_write(&mut self, request_type: RequestType, length: u64) {
+        let response = match request_type {
+            RequestType::UncachedWrite => {
                 MemoryResponce::UncachedDataWrite
             }
             _ => unreachable!(),
@@ -260,7 +185,6 @@ impl Default for Core {
             itlb: ITlb::new(),
             regfile: RegFile::new(),
             queued_flush: None,
-            outstanding_request: OutstandingRequestType::None,
         }
     }
 }
@@ -269,16 +193,16 @@ impl Default for Core {
 pub enum Reason {
     Limited,
     SyncRequest,
-    BusRead32(u32),
-    BusRead64(u32),
-    BusRead128(u32),
-    BusRead256(u32),
-    BusWrite8(u32, u32),
-    BusWrite16(u32, u32),
-    BusWrite24(u32, u32),
-    BusWrite32(u32, u32),
-    BusWrite64(u32, u64),
-    BusWrite128(u32, [u8; 16]),
+    BusRead32(RequestType, u32),
+    BusRead64(RequestType, u32),
+    BusRead128(RequestType, u32),
+    BusRead256(RequestType, u32),
+    BusWrite8(RequestType, u32, u32),
+    BusWrite16(RequestType, u32, u32),
+    BusWrite24(RequestType, u32, u32),
+    BusWrite32(RequestType, u32, u32),
+    BusWrite64(RequestType, u32, u64),
+    BusWrite128(RequestType, u32, [u8; 16]),
 }
 
 impl Reason {
@@ -291,18 +215,35 @@ impl Reason {
 
     pub fn address(&self) -> u32 {
         match self {
-            Reason::Limited => { unreachable!(); }
-            Reason::SyncRequest => { unreachable!(); }
-            Reason::BusRead32(addr) => { *addr }
-            Reason::BusRead64(addr) => { *addr }
-            Reason::BusRead128(addr) => { *addr }
-            Reason::BusRead256(addr) => { *addr }
-            Reason::BusWrite8(addr, _) => { *addr }
-            Reason::BusWrite16(addr, _) => { *addr }
-            Reason::BusWrite24(addr, _) => { *addr }
-            Reason::BusWrite32(addr, _) => { *addr }
-            Reason::BusWrite64(addr, _) => { *addr }
-            Reason::BusWrite128(addr, _) => { *addr }
+            Reason::Limited => { panic!(); }
+            Reason::SyncRequest => { panic!(); }
+            Reason::BusRead32(_, addr) => { *addr }
+            Reason::BusRead64(_, addr) => { *addr }
+            Reason::BusRead128(_, addr) => { *addr }
+            Reason::BusRead256(_, addr) => { *addr }
+            Reason::BusWrite8(_, addr, _) => { *addr }
+            Reason::BusWrite16(_, addr, _) => { *addr }
+            Reason::BusWrite24(_, addr, _) => { *addr }
+            Reason::BusWrite32(_, addr, _) => { *addr }
+            Reason::BusWrite64(_, addr, _) => { *addr }
+            Reason::BusWrite128(_, addr, _) => { *addr }
+        }
+    }
+
+    pub fn request_type(&self) -> RequestType {
+        match self {
+            Reason::Limited => { panic!(); }
+            Reason::SyncRequest => { panic!(); }
+            Reason::BusRead32(request_type, _) => { *request_type }
+            Reason::BusRead64(request_type, _) => { *request_type }
+            Reason::BusRead128(request_type, _) => { *request_type }
+            Reason::BusRead256(request_type, _) => { *request_type }
+            Reason::BusWrite8(request_type, _, _) => { *request_type }
+            Reason::BusWrite16(request_type, _, _) => { *request_type }
+            Reason::BusWrite24(request_type, _, _) => { *request_type }
+            Reason::BusWrite32(request_type, _, _) => { *request_type }
+            Reason::BusWrite64(request_type, _, _) => { *request_type }
+            Reason::BusWrite128(request_type, _, _) => { *request_type }
         }
     }
 }
@@ -312,16 +253,18 @@ impl std::fmt::Display for Reason {
         match self {
             Reason::Limited => write!(f, "Limited"),
             Reason::SyncRequest => write!(f, "SyncRequest"),
-            Reason::BusRead32(addr) => write!(f, "BusRead32({:#08x})", addr),
-            Reason::BusRead64(addr) => write!(f, "BusRead64({:#08x})", addr),
-            Reason::BusRead128(addr) => write!(f, "BusRead128({:#08x})", addr),
-            Reason::BusRead256(addr) => write!(f, "BusRead256({:#08x})", addr),
-            Reason::BusWrite8(addr, data) => write!(f, "BusWrite8({:#08x}, {:#02x})", addr, data),
-            Reason::BusWrite16(addr, data) => write!(f, "BusWrite16({:#08x}, {:#04x})", addr, data),
-            Reason::BusWrite24(addr, data) => write!(f, "BusWrite24({:#08x}, {:#06x})", addr, data),
-            Reason::BusWrite32(addr, data) => write!(f, "BusWrite32({:#08x}, {:#08x})", addr, data),
-            Reason::BusWrite64(addr, data) => write!(f, "BusWrite64({:#08x}, {:#016x})", addr, data),
-            Reason::BusWrite128(addr, data) => write!(f, "BusWrite128({:08x}, {:?})", addr, data),
+            Reason::BusRead32(RequestType::UncachedDataRead ,addr) => write!(f, "ReadData32({:#08x})", addr),
+            Reason::BusRead32(RequestType::UncachedInstructionRead ,addr) => write!(f, "ReadInst32({:#08x})", addr),
+            Reason::BusRead64(RequestType::UncachedDataRead, addr) => write!(f, "ReadData64({:#08x})", addr),
+            Reason::BusRead128(RequestType::DCacheFill, addr) => write!(f, "FillDCache128({:#08x})", addr),
+            Reason::BusRead256(RequestType::ICacheFill, addr) => write!(f, "FillICache256({:#08x})", addr),
+            Reason::BusWrite8(RequestType::UncachedWrite, addr, data) => write!(f, "Write8({:#08x}, {:#02x})", addr, data),
+            Reason::BusWrite16(RequestType::UncachedWrite, addr, data) => write!(f, "Write16({:#08x}, {:#04x})", addr, data),
+            Reason::BusWrite24(RequestType::UncachedWrite, addr, data) => write!(f, "Write24({:#08x}, {:#06x})", addr, data),
+            Reason::BusWrite32(RequestType::UncachedWrite, addr, data) => write!(f, "Write32({:#08x}, {:#08x})", addr, data),
+            Reason::BusWrite64(RequestType::UncachedWrite, addr, data) => write!(f, "Write64({:#08x}, {:#016x})", addr, data),
+            Reason::BusWrite128(RequestType::DCacheWriteback, addr, data) => write!(f, "WriteCache128({:08x}, {:?})", addr, data),
+            _ => panic!("Unknown reason"),
         }
     }
 }

@@ -1,3 +1,6 @@
+use std::fmt::Display;
+
+
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Time {
@@ -58,6 +61,16 @@ impl From<u64> for Time {
     fn from(cycles: u64) -> Self {
         Time {
             cycles
+        }
+    }
+}
+
+impl Display for Time {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.cycles == u64::MAX {
+            write!(f, "Time::MAX")
+        } else {
+            write!(f, "cycle {}", self.cycles)
         }
     }
 }
