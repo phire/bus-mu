@@ -179,19 +179,24 @@ impl Pipeline {
         // Stage 3: Execute
         // ================
         {
+            self.ex.mem_size = 0;
+            self.ex.writeback_reg = 0;
+
             // PERF: we can probably move these stalls/skips/hazards into the jump table
             if self.rf.stalled {
-                self.ex.mem_size = 0;
-                self.ex.writeback_reg = 0;
                 return if writeback_has_work { ExitReason::Ok } else { ExitReason::Blocked };
             }
 
-            if self.ex.skip_next || regfile.hazard_detected() {
-                // branch likely instructions invalidate the branch-delay slot's instruction
-                // if they aren't taken
-                self.ex.skip_next = false;
-                self.ex.mem_size = 0;
-                self.ex.writeback_reg = 0;
+            if self.ex.skip_next {
+                match self.rf.ex_mode {
+                    ExMode::Nop => {}
+                    _ => {
+                        // For some reason... branch likely instructions invalidate the branch-delay
+                        // slot's instruction if they aren't taken... Which is backwards
+                        println!("Skipping instruction {:?}", self.rf.ex_mode);
+                        self.ex.skip_next = false;
+                    }
+                }
             } else {
                 Self::run_ex_phase1(&self.rf, &mut self.ex, &mut regfile.hilo);
 
@@ -240,6 +245,7 @@ impl Pipeline {
                 if regfile.hazard_detected() {
                     // regfile detected a hazard (register value is dependent on memory load)
                     // The output of this stage is invalid, but we can exit early and retry next cycle
+                    self.rf.ex_mode = ExMode::Nop;
                     return ExitReason::Ok;
                 }
                 self.rf.next_pc = self.ex.next_pc + 4;
@@ -387,6 +393,9 @@ impl Pipeline {
             ExMode::BranchLikely(cmp) => {
                 if Self::compare(cmp, rf.alu_a, rf.alu_b) {
                     ex.next_pc = rf.temp;
+                } else {
+                    // branch likely instructions skip execution of the branch delay slot
+                    // when the branch IS NOT TAKEN. Which is stupid.
                     ex.skip_next = true;
                 }
             }
@@ -645,7 +654,7 @@ pub fn create() -> Pipeline {
             stalled: false,
         },
         ex: Execute{
-            next_pc: 0,
+            next_pc: reset_pc,
             alu_out: 0,
             addr: 0,
             skip_next: false,
