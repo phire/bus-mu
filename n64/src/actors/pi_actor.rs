@@ -4,6 +4,8 @@ use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWri
 
 pub struct PiActor {
     outbox: PiOutbox,
+    dram_addr: u32,
+    cart_addr: u32,
 }
 
 make_outbox!(
@@ -17,6 +19,8 @@ impl Default for PiActor {
     fn default() -> Self {
         Self {
             outbox: Default::default(),
+            dram_addr: 0,
+            cart_addr: 0,
         }
     }
 }
@@ -36,10 +40,12 @@ impl Handler<CpuRegWrite> for PiActor {
         let data = message.data;
         match message.address & 0x3c {
             0x00 => { // PI_DRAM_ADDR
-                todo!("PI_DRAM_ADDR")
+                println!("PI write PI_DRAM_ADDR = {:#08x}", data);
+                self.dram_addr = data & 0x00ff_ffff;
             }
             0x04 => { // PI_CART_ADDR
-                todo!("PI_CART_ADDR")
+                println!("PI write PI_CART_ADDR = {:#08x}", data);
+                self.cart_addr = data;
             }
             0x08 => { // PI_RD_LEN
                 todo!("PI_RD_LEN")
@@ -48,7 +54,7 @@ impl Handler<CpuRegWrite> for PiActor {
                 todo!("PI_WR_LEN")
             }
             0x10 => { // PI_STATUS
-                println!("PI write PI_STATUS = {:#010x}", data);
+                println!("PI write PI_STATUS = {:#08x}", data);
                 if data & 0x1 != 0 {
                     println!("  reset dma")
                 }
@@ -83,10 +89,12 @@ impl Handler<CpuRegRead> for PiActor {
     fn recv(&mut self, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
         let data = match message.address & 0x3c {
             0x00 => { // PI_DRAM_ADDR
-                todo!("PI_DRAM_ADDR")
+                println!("PI read PI_DRAM_ADDR = {:#06x}", self.dram_addr);
+                self.dram_addr
             }
             0x04 => { // PI_CART_ADDR
-                todo!("PI_CART_ADDR")
+                println!("PI read PI_CART_ADDR = {:#08x}", self.cart_addr);
+                self.cart_addr
             }
             0x08 => { // PI_RD_LEN
                 todo!("PI_RD_LEN")
@@ -97,7 +105,7 @@ impl Handler<CpuRegRead> for PiActor {
             0x10 => { // PI_STATUS
                 todo!("PI_STATUS");
                 // let data = 0;
-                // println!("PI read PI_STATUS = {:#010x}", data);
+                // println!("PI read PI_STATUS = {:#08x}", data);
                 // data
             }
             0x14 | 0x24 => { // PI_BSD_DOMn_LAT

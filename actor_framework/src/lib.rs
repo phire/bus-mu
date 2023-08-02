@@ -1,4 +1,5 @@
 // FIXME: can we do it without this?
+#![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
 #![feature(associated_type_defaults)]

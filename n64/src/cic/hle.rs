@@ -130,7 +130,7 @@ impl CicHle {
                     self.seed >> 4,
                     self.seed & 0xf,
                 ];
-                for i in 0..2 {
+                for _ in 0..2 {
                     scramble(&mut buf)
                 }
                 for b in buf.iter() {
@@ -148,7 +148,7 @@ impl CicHle {
                 for i in 0..12 {
                     buf[i + 4] = ((self.checksum >> (44-4*i)) as u8) & 0xf ;
                 }
-                for i in 0..4 {
+                for _ in 0..4 {
                     scramble(&mut buf)
                 }
                 for b in buf.iter() {

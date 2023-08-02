@@ -82,7 +82,7 @@ impl Ord for BusRequest {
 }
 
 impl Handler<BusRequest> for BusActor {
-    fn recv(&mut self, mut message: BusRequest, time: Time, _limit: Time) -> SchedulerResult {
+    fn recv(&mut self, message: BusRequest, time: Time, _limit: Time) -> SchedulerResult {
         if self.queue.is_empty() && self.commited_time < time {
             // There are no outstanding requests, so we can just accept this one
             self.commited_time = time;

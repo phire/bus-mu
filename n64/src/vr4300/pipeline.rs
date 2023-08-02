@@ -23,7 +23,6 @@ struct RegisterFile {
     temp: u64, // Either result of jump calculation, or value to store
     writeback_reg: u8,
     ex_mode: ExMode,
-    cmp_mode: CmpMode,
     store: bool,
     stalled: bool,
 }
@@ -641,8 +640,7 @@ pub fn create() -> Pipeline {
             alu_b: 0,
             temp: 0,
             writeback_reg: 0,
-            ex_mode: ExMode::Add32,
-            cmp_mode: CmpMode::Eq,
+            ex_mode: ExMode::Nop,
             store: false,
             stalled: false,
         },

@@ -118,7 +118,7 @@ impl Core {
     }
 
     pub fn set_time(&mut self, time: u64) {
-        todo!("pipeline.set_time");
+        todo!("pipeline.set_time {}", time);
     }
 
     pub fn finish_read(&mut self, request_type: RequestType, data: &[u32; 8], length: u64) {
@@ -159,7 +159,7 @@ impl Core {
         )
     }
 
-    pub fn finish_write(&mut self, request_type: RequestType, length: u64) {
+    pub fn finish_write(&mut self, request_type: RequestType, _length: u64) {
         let response = match request_type {
             RequestType::UncachedWrite => {
                 MemoryResponce::UncachedDataWrite

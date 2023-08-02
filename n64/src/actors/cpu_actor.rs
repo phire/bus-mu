@@ -9,7 +9,7 @@ use crate::{vr4300::{self}, actors::{bus_actor::{BusActor, BusRequest}, rsp_acto
 pub struct CpuActor {
     outbox: CpuOutbox,
     committed_time: Time,
-    cpu_overrun: u32,
+    _cpu_overrun: u32,
     cpu_core: vr4300::Core,
     imem: Option<Box<[u32; 512]>>,
     dmem: Option<Box<[u32; 512]>>,
@@ -52,7 +52,7 @@ impl Default for CpuActor {
         CpuActor {
             outbox,
             committed_time: Default::default(),
-            cpu_overrun: 0,
+            _cpu_overrun: 0,
             cpu_core: Default::default(),
             imem: None,
             dmem: None,
@@ -266,8 +266,8 @@ impl Handler<BusAccept> for CpuActor {
             }
             0x0400_0000 => match address & 0x040c_0000 { // RSP
                 0x0400_0000 if address & 0x1000 == 0 => { // DMEM Direct access
-                    todo!("IMEM access {}", reason);
                     self.do_rspmem(reason, time);
+                    todo!("IMEM access {}", reason);
                 }
                 0x0400_0000 if address & 0x1000 != 0 => { // IMEM Direct access
                     println!("IMEM access {}", reason);

@@ -38,7 +38,7 @@ struct InternalRam {
     cpu_checksum: [u8; 6],
     cic_checksum: [u8; 6],
     boot_timeout: Time,
-    joy_address: [u8; 5],
+    _joy_address: [u8; 5],
 }
 
 pub trait PifIO {
@@ -92,7 +92,7 @@ impl PifHle {
                 cpu_checksum: [0; 6],
                 cic_checksum: [0; 6],
                 boot_timeout: Time::MAX,
-                joy_address: [0; 5],
+                _joy_address: [0; 5],
             }
         }
     }

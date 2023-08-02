@@ -162,8 +162,8 @@ impl Handler<SiPacket> for PifActor {
                     self.outbox.send::<SiActor>(SiPacket::Ack, time);
                 }
                 SiPacket::Data64(data) => {
-                    for (i, d) in data.iter().enumerate() {
-                        self.write(*d);
+                    for d in data {
+                        self.write(d);
                     }
                     self.outbox.send::<SiActor>(SiPacket::Ack, time);
                 }

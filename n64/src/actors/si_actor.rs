@@ -141,6 +141,7 @@ impl Handler<CpuRegWrite> for SiActor {
                         self.dram_address = data;
                     }
                     0x04 => { // SI PIF read64
+                        self.state = SiState::DmaRead(16);
                         unimplemented!()
                     }
                     0x08 => { // SI PIF write4
@@ -150,6 +151,7 @@ impl Handler<CpuRegWrite> for SiActor {
                         unimplemented!()
                     }
                     0x10 => { // SI PIF write 64
+                        self.state = SiState::DmaWrite(16);
                         unimplemented!()
                     }
                     0x14 => { // SI PIF read 4
@@ -276,11 +278,11 @@ impl Handler<BusAccept> for SiActor {
                 // SiState::Idle
             }
             SiState::DmaRead(count) => {
-                unimplemented!("Write to RDRAM");
+                unimplemented!("Write to RDRAM {}", count);
                 //SiState::DmaRead(count-1)
             }
             SiState::DmaWrite(count) => {
-                unimplemented!("Read from RDRAM");
+                unimplemented!("Read from RDRAM {}", count);
                 //SiState::DmaWrite(count-1)
             }
             SiState::Idle => {

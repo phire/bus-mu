@@ -94,17 +94,17 @@ impl ITlb {
 }
 
 pub struct TlbLookup {
-    addr: ICacheAddress,
+    _addr: ICacheAddress,
 }
 
 impl TlbLookup {
     pub fn new(addr: ICacheAddress) -> TlbLookup {
         TlbLookup {
-            addr,
+            _addr: addr,
         }
     }
 
     pub fn matches(self, tag: CacheTag) -> bool {
-        todo!()
+        todo!("matches {:?}", tag)
     }
 }
