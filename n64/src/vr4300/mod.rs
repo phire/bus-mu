@@ -134,7 +134,8 @@ impl Core {
             RequestType::UncachedDataRead => {
                 match length {
                     1 => {
-                        MemoryResponce::UncachedDataRead(data[0] as u64)
+                        // Sign-extend
+                        MemoryResponce::UncachedDataRead(data[0] as i32 as u64)
                     }
                     2 => {
                         MemoryResponce::UncachedDataRead((data[0] as u64) << 16 | (data[1] as u64))

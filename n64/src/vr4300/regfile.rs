@@ -5,7 +5,6 @@ pub struct RegFile {
     bypass_reg: u8,
     bypass_val: Option<u64>,
     hazard: bool,
-    truncate_32bit: bool,
 }
 
 impl RegFile {
@@ -15,7 +14,6 @@ impl RegFile {
             bypass_reg: 0,
             bypass_val: None,
             hazard: false,
-            truncate_32bit: true,
         }
     }
     pub(super) fn read(&mut self, reg: u8) -> u64 {
@@ -35,14 +33,13 @@ impl RegFile {
             self.regs[reg as usize]
         };
 
-        let value = if self.truncate_32bit { value as i32 as u64 } else { value }; // Sign-extend
         println!("Reading {} = {:#08x}", MIPS_REG_NAMES[reg as usize], value);
         value
     }
     pub(super) fn write(&mut self, reg: u8, val: u64) {
         println!("Writing {} = {:#08x}", MIPS_REG_NAMES[reg as usize], val);
         if reg != 0 {
-            self.regs[reg as usize] = if self.truncate_32bit { val & 0xffff_ffff } else { val };
+            self.regs[reg as usize] = val;
         }
     }
     pub(super) fn bypass(&mut self, reg: u8, val: Option<u64>) {

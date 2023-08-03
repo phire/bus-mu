@@ -642,7 +642,6 @@ impl Pipeline {
             }
             MemoryResponce::UncachedDataRead(value) => {
                 if self.dc.writeback_reg != 0 {
-                    // TODO: truncate to 32 bits if we are in 32bit mode
                     self.regs.write(self.dc.writeback_reg, value);
                     self.dc.writeback_reg = 0;
                 }
