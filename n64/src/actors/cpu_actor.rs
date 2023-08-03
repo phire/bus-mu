@@ -2,7 +2,7 @@
 /// CpuActor: Emulates the CPU and MI (Mips Interface)
 
 use actor_framework::{Actor, Time, Handler, Outbox, OutboxSend, SchedulerResult};
-use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor, pi_actor::PiActor, vi_actor::ViActor, ai_actor::AiActor};
+use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor, pi_actor::{PiActor, self}, vi_actor::ViActor, ai_actor::AiActor};
 
 use crate::{vr4300::{self}, actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::{RspActor, self}}};
 
@@ -25,6 +25,8 @@ actor_framework::make_outbox!(
         reg: CpuRegRead,
         request_rsp_mem: rsp_actor::ReqestMemOwnership,
         return_rsp_mem: rsp_actor::TransferMemOwnership,
+        pi_read: pi_actor::PiRead,
+        pi_write: pi_actor::PiWrite,
     }
 );
 
@@ -312,7 +314,15 @@ impl Handler<BusAccept> for CpuActor {
                 self.do_reg::<SiActor>(reason, time);
             }
             0x0500_0000..=0x7fff_0000 => { // PI External bus
-                todo!("PI External Bus")
+                match reason {
+                    vr4300::Reason::BusRead32(_, _) => {
+                        self.outbox.send::<PiActor>(pi_actor::PiRead::new(address), time);
+                    }
+                    vr4300::Reason::BusWrite32(_, _, data) => {
+                        self.outbox.send::<PiActor>(pi_actor::PiWrite::new(address, data), time);
+                    }
+                    _ => { panic!("unexpected bus operation") }
+                }
             }
             0x8000_0000..=0xffff_ffff => {
                 todo!("Unmapped")
