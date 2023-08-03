@@ -97,11 +97,15 @@ impl Handler<CpuRegRead> for SiActor {
                             SiState::CpuRead | SiState::CpuWrite => 1,
                             _ => 0,
                         };
-                        0 | dma_busy << 0
+                        let value = 0
+                          | dma_busy << 0
                           | io_busy << 1
                           // TODO: read pending << 2
                           | (self.error as u32) << 3
                           // TODO: interrupt pending << 12
+                          ;
+                        println!("SI: Read SI_STATUS = {:08x}", value);
+                        value
                     }
                     _ => unreachable!()
                 };
@@ -116,6 +120,10 @@ impl Handler<CpuRegRead> for SiActor {
                 time64 += 4 * 12; // The command packet is 11 bits long, with an extra start bit
 
                 println!("PIF Read {:08x} at {}", address, time64);
+                match self.state {
+                    SiState::Idle => {}
+                    _ => panic!("SI is busy")
+                }
                 self.state = SiState::CpuRead;
 
                 self.outbox.send::<PifActor>(SiPacket::Read4(pif_address), time64.into());
@@ -176,6 +184,12 @@ impl Handler<CpuRegWrite> for SiActor {
                 time64 += 4 * 12; // The command packet is 11 bits long, with an extra start bit
 
                 println!("SI: Write {:08x} at {}", address, time64);
+
+                match self.state {
+                    SiState::Idle => {}
+                    _ => panic!("SI is busy")
+                }
+
                 self.state = SiState::CpuWrite;
                 self.buffer[15] = data;
 
