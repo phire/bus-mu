@@ -159,13 +159,13 @@ impl Handler<SiPacket> for PifActor {
                 match message {
                 SiPacket::Data4(data) => {
                     self.write(data);
-                    self.outbox.send::<SiActor>(SiPacket::Ack, time);
+                    self.outbox.send::<SiActor>(SiPacket::Finish, time);
                 }
                 SiPacket::Data64(data) => {
                     for d in data {
                         self.write(d);
                     }
-                    self.outbox.send::<SiActor>(SiPacket::Ack, time);
+                    self.outbox.send::<SiActor>(SiPacket::Finish, time);
                 }
                 _ => panic!("Unexpected message {:?}", message),
             }

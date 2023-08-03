@@ -202,6 +202,7 @@ pub enum SiPacket {
     Ack,
     Data4(u32),
     Data64([u32; 16]),
+    Finish, // Not a real packet, just used to track when the write to PIF finishes
 }
 
 // Handle responses from PIF
@@ -232,6 +233,10 @@ impl Handler<SiPacket> for SiActor {
                 self.buffer = data;
                 req_time = time.add(1 + 4 + 4 * 32);
                 self.dma_active = true;
+            }
+            SiPacket::Finish => {
+                self.state = SiState::Idle;
+                return SchedulerResult::Ok;
             }
             _ => panic!("Invalid message")
         }
