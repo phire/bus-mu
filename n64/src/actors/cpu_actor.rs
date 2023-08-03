@@ -2,7 +2,7 @@
 /// CpuActor: Emulates the CPU and MI (Mips Interface)
 
 use actor_framework::{Actor, Time, Handler, Outbox, OutboxSend, SchedulerResult};
-use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor, pi_actor::{PiActor, self}, vi_actor::ViActor, ai_actor::AiActor};
+use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor, pi_actor::{PiActor, self}, vi_actor::ViActor, ai_actor::AiActor, rdp_actor::RdpActor};
 
 use crate::{vr4300::{self}, actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::{RspActor, self}}};
 
@@ -284,7 +284,7 @@ impl Handler<BusAccept> for CpuActor {
                 _ => unreachable!()
             }
             0x0410_0000 => { // RDP Command Regs
-                todo!("RDP Command Regs")
+                self.do_reg::<RdpActor>(reason, time);
             }
             0x0420_0000 => {
                 todo!("RDP Span Regs")

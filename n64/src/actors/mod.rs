@@ -8,6 +8,7 @@ pub mod rsp_actor;
 pub mod pi_actor;
 pub mod vi_actor;
 pub mod ai_actor;
+pub mod rdp_actor;
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 #[derive(Named)]
@@ -29,4 +30,6 @@ pub enum N64Actors {
     ViActor,
     #[named(class(ai_actor::AiActor))]
     AiActor,
+    #[named(class(rdp_actor::RdpActor))]
+    RdpActor,
 }
