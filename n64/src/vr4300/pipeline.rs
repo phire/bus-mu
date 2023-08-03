@@ -90,7 +90,7 @@ pub enum ExitReason
 
 
 impl Pipeline {
-    fn compare(cmp: CmpMode, a: u64, b: u64) -> bool {
+    fn compare(cmp: CmpMode, a: i64, b: i64) -> bool {
         match cmp {
             CmpMode::Eq => a == b,
             CmpMode::Ne => a != b,
@@ -396,7 +396,7 @@ impl Pipeline {
             ExMode::Branch(cmp) => {
                 // PERF: Check the compiler will automatically duplicate this case?
                 //       Or should we be doing that optimization manually?
-                if Self::compare(cmp, rf.alu_a, rf.alu_b) {
+                if Self::compare(cmp, rf.alu_a as i64, rf.alu_b as i64) {
                     ex.next_pc = rf.temp;
                     ex.alu_out = old_pc + 4;
                 } else {
@@ -405,7 +405,7 @@ impl Pipeline {
                 }
             }
             ExMode::BranchLikely(cmp) => {
-                if Self::compare(cmp, rf.alu_a, rf.alu_b) {
+                if Self::compare(cmp, rf.alu_a as i64, rf.alu_b as i64) {
                     ex.next_pc = rf.temp;
                     ex.alu_out = old_pc + 4;
                 } else {
