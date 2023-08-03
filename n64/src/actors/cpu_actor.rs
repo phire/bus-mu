@@ -236,7 +236,7 @@ impl CpuActor {
         };
 
         if let Some(mem) = mem {
-            let offset = ((reason.address() >> 2) & 0x3ff) as usize;
+            let offset = ((reason.address() >> 2) & 0x1ff) as usize;
 
             match reason {
                 vr4300::Reason::BusRead32(_, _) => {
@@ -268,8 +268,8 @@ impl Handler<BusAccept> for CpuActor {
             }
             0x0400_0000 => match address & 0x040c_0000 { // RSP
                 0x0400_0000 if address & 0x1000 == 0 => { // DMEM Direct access
+                    println!("DMEM access {}", reason);
                     self.do_rspmem(reason, time);
-                    todo!("IMEM access {}", reason);
                 }
                 0x0400_0000 if address & 0x1000 != 0 => { // IMEM Direct access
                     println!("IMEM access {}", reason);
