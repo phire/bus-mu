@@ -312,7 +312,7 @@ impl Pipeline {
                     rf.alu_a = regfile.read(i.rs());
                     rf.alu_b = 0;
                     let offset = (i.imm() as i16 as u64) << 2;
-                    rf.temp = rf.next_pc + offset;
+                    rf.temp = rf.next_pc.wrapping_add(offset);
                     rf.writeback_reg = 31;
                 }
                 RfMode::ImmSigned => {
