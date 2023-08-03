@@ -446,6 +446,8 @@ pub enum ExMode {
     MemLeft(u8),
     MemRight(u8),
     MemLinked(u8),
+    LoadInternal(InternalReg),
+    StoreInternal(InternalReg),
     ExUnimplemented,
 }
 
@@ -459,6 +461,11 @@ pub enum CmpMode {
     Gt,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum InternalReg {
+    HI = 0,
+    LO = 1,
+}
 
 const fn build_primary_table() -> [InstructionInfo; 64] {
     use InstructionInfo::*;
@@ -572,10 +579,13 @@ const fn build_special_table() -> [InstructionInfo; 64] {
         Reserved,
         Unimplemented("SYNC", 0), // Form::ExceptionType(0xf), 0),
         // 2
-        Unimplemented("MFHI", 0), // Form::MoveFrom(0x10), 0),
-        Unimplemented("MTHI", 0), // Form::MoveTo(0x11), 0),
-        Unimplemented("MFLO", 0), // Form::MoveFrom(0x12), 0),
-        Unimplemented("MTLO", 0), // Form::MoveTo(0x13), 0),
+        // HWTEST: I'm not sure what should happen in RfMode for MFHI/MFLO. Almost every other i
+        //         instruction does at least one register load (causing a false hazard, which is visible)
+        Op("MFHI", 0, Form::MoveFrom(0x10), ImmUnsigned, LoadInternal(InternalReg::HI)),
+        // HWTEST: Same question with RfMode for MTHI/MTLO
+        Op("MTHI", 0, Form::MoveTo(0x11), RegRegNoWrite, StoreInternal(InternalReg::HI)),
+        Op("MFLO", 0, Form::MoveFrom(0x12), ImmUnsigned, LoadInternal(InternalReg::LO)),
+        Op("MTLO", 0, Form::MoveTo(0x13), RegRegNoWrite, StoreInternal(InternalReg::LO)),
         Op("DSLLV", 0, Form::ShiftReg(0x14), RegReg, ShiftLeft64),
         Reserved,
         Op("DSRLV", 0, Form::ShiftReg(0x16), RegReg, ShiftRight64),

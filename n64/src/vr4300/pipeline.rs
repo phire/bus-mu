@@ -36,6 +36,9 @@ struct Execute {
     store: bool,
     trap: bool,
     writeback_reg: u8,
+
+    // internal storage
+    hilo: [u64; 2],
 }
 struct DataCache {
     cache_attempt: DataCacheAttempt,
@@ -55,6 +58,7 @@ pub struct Pipeline {
     ex: Execute,
     dc: DataCache,
     wb: WriteBack,
+    regs: RegFile,
 }
 
 pub enum MemoryReq
@@ -106,7 +110,6 @@ impl Pipeline {
         icache: &mut ICache,
         dcache: &mut DCache,
         itlb: &mut ITlb,
-        regfile: &mut RegFile,
     ) -> ExitReason {
         // We evaluate the pipeline in reverse order.
         // So each stage can use the previous stage's output before it's overwritten
@@ -143,7 +146,7 @@ impl Pipeline {
             // Register file writeback
             if self.dc.writeback_reg != 0 {
                 // TODO: truncate to 32 bits if we are in 32bit mode
-                regfile.write(self.dc.writeback_reg, writeback_value);
+                self.regs.write(self.dc.writeback_reg, writeback_value);
             }
         }
 
@@ -198,12 +201,12 @@ impl Pipeline {
                     }
                 }
             } else {
-                Self::run_ex_phase1(&self.rf, &mut self.ex, &mut regfile.hilo);
+                Self::run_ex_phase1(&self.rf, &mut self.ex);
 
                 // TODO: return here if ex needs multiple cycles?
             }
 
-            regfile.bypass(
+            self.regs.bypass(
                 self.ex.writeback_reg,
                 match self.ex.mem_size {
                     0 => Some(self.ex.alu_out),
@@ -240,9 +243,9 @@ impl Pipeline {
                 }
             } else {
                 // ICache hit. We can continue with the rest of this stage
-                Self::run_regfile(self.ic.cache_data, &mut self.rf, regfile);
+                Self::run_regfile(self.ic.cache_data, &mut self.rf, &mut self.regs);
 
-                if regfile.hazard_detected() {
+                if self.regs.hazard_detected() {
                     // regfile detected a hazard (register value is dependent on memory load)
                     // The output of this stage is invalid, but we can exit early and retry next cycle
                     self.rf.ex_mode = ExMode::Nop;
@@ -360,11 +363,17 @@ impl Pipeline {
                 }
             }
         } else {
-            todo!("Exception on reserved instruction");
+            match inst_info {
+                InstructionInfo::Reserved =>
+                    todo!("Exception on reserved instruction {:08x}", instruction_word),
+                InstructionInfo::Unimplemented(name, _) =>
+                    todo!("Unimplemented unstruction {} ({:08x})", name, instruction_word),
+                _ => unreachable!(),
+            }
         }
     }
 
-    fn run_ex_phase1(rf: &RegisterFile, ex: &mut Execute, hilo: &mut [u64; 2]) {
+    fn run_ex_phase1(rf: &RegisterFile, ex: &mut Execute) {
         let old_pc = ex.next_pc;
         ex.next_pc = rf.next_pc;
         ex.trap = false;
@@ -488,13 +497,13 @@ impl Pipeline {
                 let out = (rf.alu_a as i64).wrapping_mul(rf.alu_b as i64);
                 let hi = (out >> 32) as i32 as u64; // sign extend
                 let lo = out as i32 as u64; // sign extend
-                *hilo = [hi, lo];
+                ex.hilo = [hi, lo];
             }
             ExMode::MulU32 => {
                 let out = (rf.alu_a as u64).wrapping_mul(rf.alu_b as u64);
                 let hi = (out >> 32) as u32 as u64; // sign extend
                 let lo = out as u32 as u64; // sign extend
-                *hilo = [hi, lo];
+                ex.hilo = [hi, lo];
             }
             ExMode::Mul64 => {
                 let a = rf.alu_a as i64 as i128;
@@ -502,7 +511,7 @@ impl Pipeline {
                 let out: u128 = a.wrapping_mul(b) as u128;
                 let hi = (out as u128 >> 64) as u64;
                 let lo = out as u64;
-                *hilo = [hi, lo];
+                ex.hilo = [hi, lo];
             }
             ExMode::MulU64 => {
                 let a = rf.alu_a as u128;
@@ -510,20 +519,20 @@ impl Pipeline {
                 let out: u128 = a.wrapping_mul(b);
                 let hi = (out >> 64) as u64;
                 let lo = out as u64;
-                *hilo = [hi, lo];
+                ex.hilo = [hi, lo];
             }
             ExMode::Div32 => {
                 if rf.alu_b as i32 == 0 {
                     // Manual says this is undefined. Ares implements it as:
                     let lo = if (rf.alu_a as i32) < 0 { u64::MAX } else { 1 };
                     let hi = rf.alu_a as i32 as u64;
-                    *hilo = [hi, lo];
+                    ex.hilo = [hi, lo];
                 } else {
                     let div = (rf.alu_a as i32).wrapping_div(rf.alu_b as i32);
                     let rem = (rf.alu_a as i32).wrapping_rem(rf.alu_b as i32);
                     let hi = rem as u64;
                     let lo = div as u64;
-                    *hilo = [hi, lo];
+                    ex.hilo = [hi, lo];
                 }
             }
             ExMode::DivU32 => {
@@ -531,13 +540,13 @@ impl Pipeline {
                     // Ares:
                     let lo = u64::MAX;
                     let hi = rf.alu_a as i32 as u64;
-                    *hilo = [hi, lo];
+                    ex.hilo = [hi, lo];
                 } else {
                     let div = (rf.alu_a as u32).wrapping_div(rf.alu_b as u32);
                     let rem = (rf.alu_a as u32).wrapping_rem(rf.alu_b as u32);
                     let hi = rem as u64;
                     let lo = div as u64;
-                    *hilo = [hi, lo];
+                    ex.hilo = [hi, lo];
                 }
             }
             ExMode::Div64 => {
@@ -545,13 +554,13 @@ impl Pipeline {
                     // Ares:
                     let lo = if (rf.alu_a as i64) < 0 { u64::MAX } else { 1 };
                     let hi = rf.alu_a;
-                    *hilo = [hi, lo];
+                    ex.hilo = [hi, lo];
                 } else {
                     let div = (rf.alu_a as i64).wrapping_div(rf.alu_b as i64);
                     let rem = (rf.alu_a as i64).wrapping_rem(rf.alu_b as i64);
                     let hi = rem as u64;
                     let lo = div as u64;
-                    *hilo = [hi, lo];
+                    ex.hilo = [hi, lo];
                 }
             }
             ExMode::DivU64 => {
@@ -559,13 +568,13 @@ impl Pipeline {
                     // Ares:
                     let lo = u64::MAX;
                     let hi = rf.alu_a;
-                    *hilo = [hi, lo];
+                    ex.hilo = [hi, lo];
                 } else {
                     let div = rf.alu_a.wrapping_div(rf.alu_b);
                     let rem = rf.alu_a.wrapping_rem(rf.alu_b);
                     let hi = rem as u64;
                     let lo = div as u64;
-                    *hilo = [hi, lo];
+                    ex.hilo = [hi, lo];
                 }
             }
             ExMode::Mem(size) => {
@@ -583,6 +592,16 @@ impl Pipeline {
             ExMode::MemLeft(_) => todo!(),
             ExMode::MemRight(_) => todo!(),
             ExMode::MemLinked(_) => todo!(),
+            ExMode::LoadInternal(reg) => {
+                // HWTEST: The VR manual says accessing these registers more than two cycles before
+                //         and an instruction that uses to them is undefined (if an exception happens)
+                //         So.... need to work out what's actually going on here.
+                ex.alu_out = ex.hilo[reg as usize];
+            }
+            ExMode::StoreInternal(reg) => {
+                // HWTEST: same as above
+                ex.hilo[reg as usize] = rf.alu_a;
+            }
             ExMode::ExUnimplemented => {
                 println!("Unimplemented Exmode");
             }
@@ -590,7 +609,7 @@ impl Pipeline {
     }
 
     pub fn memory_responce(&mut self, info: MemoryResponce, icache: &mut ICache,
-        dcache: &mut DCache, regfile: &mut RegFile) {
+        dcache: &mut DCache) {
         match info {
             MemoryResponce::ICacheFill(data) => {
                 // Reconstruct line/offset from program counter
@@ -617,7 +636,7 @@ impl Pipeline {
             MemoryResponce::UncachedDataRead(value) => {
                 if self.dc.writeback_reg != 0 {
                     // TODO: truncate to 32 bits if we are in 32bit mode
-                    regfile.write(self.dc.writeback_reg, value);
+                    self.regs.write(self.dc.writeback_reg, value);
                     self.dc.writeback_reg = 0;
                 }
                 self.dc.mem_size = 0;
@@ -662,6 +681,7 @@ pub fn create() -> Pipeline {
             store: false,
             trap: false,
             writeback_reg: 0,
+            hilo: [0, 0],
         },
         dc: DataCache{
             cache_attempt: DataCacheAttempt::empty(),
@@ -674,5 +694,6 @@ pub fn create() -> Pipeline {
         wb: WriteBack{
             stalled: false,
         },
+        regs: RegFile::new(),
     }
 }

@@ -36,7 +36,6 @@ pub struct Core {
     icache: ICache,
     dcache: DCache,
     itlb: ITlb,
-    regfile: RegFile,
     //bus: SysADBus,
     queued_flush: Option<(u32, [u8; 16])>,
 }
@@ -60,7 +59,6 @@ impl Core {
                 &mut self.icache,
                 &mut self.dcache,
                 &mut self.itlb,
-                &mut self.regfile
             );
             let reason = match reason {
                 ExitReason::Ok => { continue; }
@@ -155,7 +153,6 @@ impl Core {
             response,
             &mut self.icache,
             &mut self.dcache,
-            &mut self.regfile
         )
     }
 
@@ -170,7 +167,6 @@ impl Core {
             response,
             &mut self.icache,
             &mut self.dcache,
-            &mut self.regfile
         )
     }
 
@@ -183,7 +179,6 @@ impl Default for Core {
             icache: ICache::new(),
             dcache: DCache::new(),
             itlb: ITlb::new(),
-            regfile: RegFile::new(),
             queued_flush: None,
         }
     }
