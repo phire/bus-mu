@@ -7,7 +7,6 @@
 use cache::{ICache, DCache};
 use microtlb::ITlb;
 use pipeline::{MemoryReq, ExitReason};
-use regfile::RegFile;
 use pipeline::Pipeline;
 
 use self::pipeline::MemoryResponce;

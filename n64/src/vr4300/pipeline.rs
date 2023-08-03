@@ -391,21 +391,28 @@ impl Pipeline {
                 // This looks sus...
                 // Why do relative jumps not need a subtract?
                 ex.next_pc = rf.temp - 4;
+                ex.alu_out = old_pc + 4;
             }
             ExMode::Branch(cmp) => {
                 // PERF: Check the compiler will automatically duplicate this case?
                 //       Or should we be doing that optimization manually?
                 if Self::compare(cmp, rf.alu_a, rf.alu_b) {
                     ex.next_pc = rf.temp;
+                    ex.alu_out = old_pc + 4;
+                } else {
+                    // Cancel write to link register
+                    ex.writeback_reg = 0;
                 }
             }
             ExMode::BranchLikely(cmp) => {
                 if Self::compare(cmp, rf.alu_a, rf.alu_b) {
                     ex.next_pc = rf.temp;
+                    ex.alu_out = old_pc + 4;
                 } else {
                     // branch likely instructions skip execution of the branch delay slot
                     // when the branch IS NOT TAKEN. Which is stupid.
                     ex.skip_next = true;
+                    ex.writeback_reg = 0;
                 }
             }
             ExMode::Add32 => {

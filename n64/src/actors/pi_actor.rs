@@ -126,11 +126,11 @@ impl Handler<CpuRegRead> for PiActor {
             }
             0x08 => { // PI_RD_LEN
                 println!("PI read PI_RD_LEN = 0x7f");
-                0x7f // N64brew "Reading appears to always return `0x7F` (more research required)"
+                0x7f // N64brew: "Reading appears to always return `0x7F` (more research required)"
             }
             0x0c => { // PI_WR_LEN
                 println!("PI read PI_WR_LEN = 0x7f");
-                0x7f // N64brew "Reading appears to always return `0x7F` (more research required)"
+                0x7f // N64brew: "Reading appears to always return `0x7F` (more research required)"
             }
             0x10 => { // PI_STATUS
                 todo!("PI_STATUS");
