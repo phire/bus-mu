@@ -41,16 +41,14 @@ pub struct Core {
 
 impl Core {
     pub fn advance(&mut self, cycle_limit: u64) -> CoreRunResult {
-
-        let mut cycles = 0;
-
-        if let Some((addr, data)) = self.queued_flush.take() {
+        if self.pipeline.blocked() {
             return CoreRunResult {
-                cycles,
-                reason: Reason::BusWrite128(RequestType::DCacheWriteback, addr, data)
+                cycles: cycle_limit,
+                reason: Reason::Limited,
             }
         }
 
+        let mut cycles = 0;
         while cycles < cycle_limit {
             cycles += 1;
 
@@ -118,7 +116,8 @@ impl Core {
         todo!("pipeline.set_time {}", time);
     }
 
-    pub fn finish_read(&mut self, request_type: RequestType, data: &[u32; 8], length: u64) {
+    pub fn finish_read(&mut self, request_type: RequestType, data: &[u32; 8], length: u64) -> Option<Reason> {
+        let mut mem_req = None;
         let response = match request_type {
             RequestType::UncachedInstructionRead => {
                 let word = data[0];
@@ -128,6 +127,10 @@ impl Core {
                 MemoryResponce::UncachedInstructionRead(data[0])
             }
             RequestType::DCacheFill => {
+                mem_req = self.queued_flush.take().map(|(addr, data)| {
+                    Reason::BusWrite128(RequestType::DCacheWriteback, addr, data)
+                });
+
                 todo!()
                 //MemoryResponce::DCacheFill([mem])
             }
@@ -153,7 +156,9 @@ impl Core {
             response,
             &mut self.icache,
             &mut self.dcache,
-        )
+        );
+
+        mem_req
     }
 
     pub fn finish_write(&mut self, request_type: RequestType, _length: u64) {

@@ -43,7 +43,7 @@ fn to_cpu_time(bus_time: u64, odd: u64) -> u64 {
 fn to_bus_time(cpu_time: u64, odd: u64) -> u64 {
     // CPU has a 1.5x clock multiplier
     // TODO: Check if the logic for odd is anywhere near correct
-    cpu_time - ((cpu_time + odd) / 3u64)
+    cpu_time - ((cpu_time + odd * 2) / 3u64)
 }
 
 impl Default for CpuActor {
@@ -72,21 +72,24 @@ enum AdvanceResult {
 impl CpuActor {
     fn advance(&mut self, limit: Time) -> AdvanceResult {
         let limit_64: u64 = limit.into();
-        //println!("CpuActor::advance({})", limit_64);
         let mut commit_time_64: u64 = self.committed_time.into();
+
+        println!("CpuActor::advance({}, {})", limit_64, commit_time_64);
+
         let cycles: u64 = limit_64 - commit_time_64;
 
         let mut odd = commit_time_64 & 1u64;
 
         let mut cpu_cycles = to_cpu_time(cycles, odd);
+        assert!(cycles == to_bus_time(cpu_cycles, odd), "cycles {} != cpu_cycles {} when odd = {}", cycles, cpu_cycles, odd);
         loop {
             let result = self.cpu_core.advance(to_cpu_time(cycles, odd));
 
             let used_cycles = to_bus_time(result.cycles, odd);
             commit_time_64 += used_cycles;
             self.committed_time = commit_time_64.into();
-            println!("core did {} ({}) cycles and returned {} at cycle {}", used_cycles,  result.cycles, result.reason, commit_time_64);
-            assert!(used_cycles <= cycles);
+            println!("core did {} ({}) cycles and returned {} at cycle {}", used_cycles, result.cycles, result.reason, commit_time_64);
+            assert!(used_cycles <= cycles, "{} > {} | {}, {}", used_cycles, cycles, cpu_cycles, result.cycles);
 
             return match result.reason {
                 vr4300::Reason::Limited => {
@@ -108,15 +111,19 @@ impl CpuActor {
                 }
                 reason => {
                     // Request over C-BUS/D-BUS
-                    self.outstanding_mem_request = Some(reason);
-                    let request_time = core::cmp::max(self.bus_free, self.committed_time);
-                    // TODO: handle bus transfer times
+                    self.start_request(reason);
 
-                    self.outbox.send::<BusActor>(BusRequest::new::<Self>(1), request_time);
                     AdvanceResult::MemRequest
                 }
             };
         };
+    }
+
+    fn start_request(&mut self, request: vr4300::Reason) {
+        self.outstanding_mem_request = Some(request);
+        let request_time = core::cmp::max(self.bus_free, self.committed_time);
+
+        self.outbox.send::<BusActor>(BusRequest::new::<Self>(1), request_time);
     }
 
     fn finish_mem(&mut self, mem_finished: MemFinished, time: Time, limit: Time) -> SchedulerResult {
@@ -138,13 +145,22 @@ impl CpuActor {
         self.bus_free = finish_time;
 
         // Advance the CPU upto the finish time
-        self.advance(time);
+        self.advance(finish_time);
 
         let req_type = request.request_type();
 
         match &mem_finished {
-            MemFinished::Read(message) => self.cpu_core.finish_read(req_type, &message.data, message.length()),
-            MemFinished::Write(message) => self.cpu_core.finish_write(req_type, message.length()),
+            MemFinished::Read(message) => {
+                let new_req = self.cpu_core.finish_read(req_type, &message.data, message.length());
+
+                if let Some(new_req) = new_req {
+                    assert!(self.outstanding_mem_request.is_none());
+                    self.start_request(new_req);
+                }
+            }
+            MemFinished::Write(message) => {
+                self.cpu_core.finish_write(req_type, message.length());
+            }
         }
 
         return match &self.outstanding_mem_request {
@@ -156,10 +172,11 @@ impl CpuActor {
             None => {
                 println!("CPU: Finished {:}", request);
                 // Otherwise, run the CPU now; Avoid scheduler overhead
-                let result = self.recv(CpuRun{}, time, limit);
-                self.message_delivered(time);
+                if (limit > finish_time) {
+                    self.advance(limit);
+                }
 
-                result
+                SchedulerResult::Ok
             }
         }
     }

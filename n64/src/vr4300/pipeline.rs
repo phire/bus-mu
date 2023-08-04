@@ -14,6 +14,7 @@ struct InstructionCache {
     cache_data: u32,
     cache_tag: CacheTag,
     expected_tag: CacheTag,
+    stalled: bool,
 }
 
 struct RegisterFile {
@@ -24,7 +25,6 @@ struct RegisterFile {
     writeback_reg: u8,
     ex_mode: ExMode,
     store: bool,
-    stalled: bool,
 }
 
 struct Execute {
@@ -105,6 +105,20 @@ impl Pipeline {
         self.rf.next_pc
     }
 
+    /// The pipeline is blocked if (given the current state) there is no possible
+    pub fn blocked(&self) -> bool {
+        if self.wb.stalled {
+            // Easy case, WB is stalled, so the entire pipeline is blocked
+            return true;
+        }
+        let wb_has_work = self.dc.mem_size != 0 || self.dc.writeback_reg != 0;
+        let dc_has_work = self.ex.mem_size != 0 || self.ex.writeback_reg != 0;
+        let ex_has_work = match self.rf.ex_mode { ExMode::Nop => false, _ => true };
+
+        // Otherwise we are blocked if ic is stalled and nothing else has work
+        return self.ic.stalled && !(wb_has_work || dc_has_work || ex_has_work);
+    }
+
     pub fn cycle(
         &mut self,
         icache: &mut ICache,
@@ -115,14 +129,13 @@ impl Pipeline {
         // So each stage can use the previous stage's output before it's overwritten
         // This also allows us to stall the pipeline by returning early.
 
-        if self.wb.stalled {
-            return ExitReason::Blocked;
-        }
-
         // ==================
         // Stage 5: WriteBack
         // ==================
         {
+            // We don't need to check this, because blocked() will prevent cycle from being called in this case
+            debug_assert!(self.wb.stalled == false);
+
             // TODO: CP0 bypass interlock
             let mut writeback_value = self.dc.alu_out;
 
@@ -144,10 +157,7 @@ impl Pipeline {
             }
 
             // Register file writeback
-            if self.dc.writeback_reg != 0 {
-                // TODO: truncate to 32 bits if we are in 32bit mode
-                self.regs.write(self.dc.writeback_reg, writeback_value);
-            }
+            self.regs.write(self.dc.writeback_reg, writeback_value);
         }
 
         let mut writeback_has_work = false;
@@ -185,11 +195,7 @@ impl Pipeline {
             self.ex.mem_size = 0;
             self.ex.writeback_reg = 0;
 
-            // PERF: we can probably move these stalls/skips/hazards into the jump table
-            if self.rf.stalled {
-                return if writeback_has_work { ExitReason::Ok } else { ExitReason::Blocked };
-            }
-
+            // PERF: we might be able to move this skip logic into the jump table
             if self.ex.skip_next {
                 match self.rf.ex_mode {
                     ExMode::Nop => {}
@@ -198,6 +204,7 @@ impl Pipeline {
                         // slot's instruction if they aren't taken... Which is backwards
                         println!("Skipping instruction {:?}", self.rf.ex_mode);
                         self.ex.skip_next = false;
+                        self.ex.next_pc = self.rf.next_pc;
                     }
                 }
             } else {
@@ -205,13 +212,6 @@ impl Pipeline {
 
                 // TODO: return here if ex needs multiple cycles?
             }
-
-            self.regs.bypass(
-                self.ex.writeback_reg,
-                match self.ex.mem_size {
-                    0 => Some(self.ex.alu_out),
-                    _ => None
-                });
         }
 
         // ======================
@@ -222,36 +222,65 @@ impl Pipeline {
             // ICache always returns an instruction, but it might be the wrong one
             // The only way to know is to check the output of ITLB matches the tag ICache returned
 
-            if !self.ic.expected_tag.is_valid() {
-                // ITLB missed. We need to query the Joint-TLB for a result
-                todo!("JTLB lookup");
-                //return ExitReason::Ok;
-            } else if self.ic.cache_tag != self.ic.expected_tag {
-                self.rf.stalled = true;
-                if self.ic.expected_tag.is_uncached() {
-                    let lower_bits = (self.rf.next_pc as u32) & 0xfff;
-                    // Do an uncached instruction fetch
-                    return ExitReason::Mem(
-                        MemoryReq::UncachedInstructionRead(self.ic.expected_tag.tag() | lower_bits));
+            // PERF: How to we tell the compiler this first case is the most likely?
+            if self.ic.cache_tag == self.ic.expected_tag {
+                debug_assert!(self.ic.stalled == false);
+                debug_assert!(self.ic.expected_tag.is_valid());
 
-                } else {
-                    let cache_line = (self.rf.next_pc as u32) & 0x0000_3fe0;
-                    let physical_address = self.ic.expected_tag.tag() | cache_line;
-                    return ExitReason::Mem(
-                        MemoryReq::ICacheFill(physical_address)
-                    );
-                }
-            } else {
+                self.regs.bypass(
+                    self.ex.writeback_reg,
+                    match self.ex.mem_size {
+                        0 => Some(self.ex.alu_out),
+                        _ => None
+                    });
+
                 // ICache hit. We can continue with the rest of this stage
                 Self::run_regfile(self.ic.cache_data, &mut self.rf, &mut self.regs);
 
                 if self.regs.hazard_detected() {
                     // regfile detected a hazard (register value is dependent on memory load)
-                    // The output of this stage is invalid, but we can exit early and retry next cycle
+                    // The output of this stage is invalid, but we will retry next cycle
                     self.rf.ex_mode = ExMode::Nop;
                     return ExitReason::Ok;
                 }
+
                 self.rf.next_pc = self.ex.next_pc + 4;
+
+            } else if !self.ic.stalled && self.ic.cache_tag != self.ic.expected_tag {
+                // PERF: Can we tell the compiler this block is more likely than the next?
+
+                debug_assert!(self.ic.expected_tag.is_valid());
+                self.ic.stalled = true;
+                self.rf.ex_mode = ExMode::Nop;
+
+                let req = if self.ic.expected_tag.is_uncached() {
+                    let lower_bits = (self.rf.next_pc as u32) & 0xfff;
+                    // Do an uncached instruction fetch
+                    MemoryReq::UncachedInstructionRead(self.ic.expected_tag.tag() | lower_bits)
+                } else {
+                    let cache_line = (self.rf.next_pc as u32) & 0x0000_3fe0;
+                    let physical_address = self.ic.expected_tag.tag() | cache_line;
+
+                    MemoryReq::ICacheFill(physical_address)
+                };
+
+                return ExitReason::Mem(req);
+            } else if self.ic.stalled {
+                // We should be able to get away with a simplified blocked check here
+                if !writeback_has_work {
+                    debug_assert!(self.blocked());
+                    return ExitReason::Blocked;
+
+                } else {
+                    debug_assert!(!self.blocked());
+                    return ExitReason::Ok;
+                }
+            } else {
+                debug_assert!(!self.ic.expected_tag.is_valid());
+
+                // ITLB missed. We need to query the Joint-TLB for a result
+                todo!("JTLB lookup");
+                //return ExitReason::Ok;
             }
         }
 
@@ -385,20 +414,20 @@ impl Pipeline {
         match rf.ex_mode {
             ExMode::Nop => {
                 ex.writeback_reg = 0;
-                ex.next_pc = old_pc;
+                ex.next_pc = old_pc; // Don't let Nop clobber pending branches
             }
             ExMode::Jump => {
                 // This looks sus...
                 // Why do relative jumps not need a subtract?
                 ex.next_pc = rf.temp - 4;
-                ex.alu_out = old_pc + 4;
+                ex.alu_out = rf.next_pc + 4;
             }
             ExMode::Branch(cmp) => {
                 // PERF: Check the compiler will automatically duplicate this case?
                 //       Or should we be doing that optimization manually?
                 if Self::compare(cmp, rf.alu_a as i64, rf.alu_b as i64) {
                     ex.next_pc = rf.temp;
-                    ex.alu_out = old_pc + 4;
+                    ex.alu_out = rf.next_pc + 4;
                 } else {
                     // Cancel write to link register
                     ex.writeback_reg = 0;
@@ -407,7 +436,7 @@ impl Pipeline {
             ExMode::BranchLikely(cmp) => {
                 if Self::compare(cmp, rf.alu_a as i64, rf.alu_b as i64) {
                     ex.next_pc = rf.temp;
-                    ex.alu_out = old_pc + 4;
+                    ex.alu_out = rf.next_pc + 4;
                 } else {
                     // branch likely instructions skip execution of the branch delay slot
                     // when the branch IS NOT TAKEN. Which is stupid.
@@ -628,12 +657,12 @@ impl Pipeline {
 
                 self.ic.cache_data = data[offset];
                 self.ic.cache_tag = new_tag;
-                self.rf.stalled = false;
+                self.ic.stalled = false;
             }
             MemoryResponce::UncachedInstructionRead(word) => {
                 self.ic.cache_data = word;
                 self.ic.cache_tag = self.ic.expected_tag;
-                self.rf.stalled = false;
+                self.ic.stalled = false;
                 self.rf.ex_mode = ExMode::Nop;
             }
             MemoryResponce::DCacheFill(data) => {
@@ -667,6 +696,7 @@ pub fn create() -> Pipeline {
             // Start with the first instruction fetch already started.
             // Otherwise the RF stage will incorrectly start a ITLB miss on the first cycle
             expected_tag: CacheTag::new_uncached(reset_pc as u32 & 0x1fff_ffff),
+            stalled: false,
         },
         rf: RegisterFile{
             next_pc: reset_pc,
@@ -676,7 +706,6 @@ pub fn create() -> Pipeline {
             writeback_reg: 0,
             ex_mode: ExMode::Nop,
             store: false,
-            stalled: false,
         },
         ex: Execute{
             next_pc: reset_pc,

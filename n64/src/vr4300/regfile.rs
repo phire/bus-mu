@@ -37,8 +37,8 @@ impl RegFile {
         value
     }
     pub(super) fn write(&mut self, reg: u8, val: u64) {
-        println!("Writing {} = {:#08x}", MIPS_REG_NAMES[reg as usize], val);
         if reg != 0 {
+            println!("Writing {} = {:#08x}", MIPS_REG_NAMES[reg as usize], val);
             self.regs[reg as usize] = val;
         }
     }
