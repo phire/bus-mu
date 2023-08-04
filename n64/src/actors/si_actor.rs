@@ -59,13 +59,6 @@ impl SiActor {
 
 impl Handler<CpuRegRead> for SiActor {
     fn recv(&mut self, message: CpuRegRead, time: Time, _: Time) -> SchedulerResult {
-        match self.state {
-            SiState::Idle => {}
-            // HWTEST: What should happen when SI is busy?
-            //         N64brew suggests bus conflicts.
-            _ => panic!("SI is busy")
-        }
-
         let address = message.address;
         match address {
             0x0480_0000..=0x048f_ffff => {

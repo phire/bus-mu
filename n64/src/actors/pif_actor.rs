@@ -154,21 +154,21 @@ impl Handler<SiPacket> for PifActor {
                 _ => panic!("Unexpected message {:?}", message),
             }
             PifState::WaitData => {
-
                 println!("PIF: Waitdata {:?}", message);
                 match message {
-                SiPacket::Data4(data) => {
-                    self.write(data);
-                    self.outbox.send::<SiActor>(SiPacket::Finish, time);
-                }
-                SiPacket::Data64(data) => {
-                    for d in data {
-                        self.write(d);
+                    SiPacket::Data4(data) => {
+                        self.write(data);
                     }
-                    self.outbox.send::<SiActor>(SiPacket::Finish, time);
+                    SiPacket::Data64(data) => {
+                        for d in data {
+                            self.write(d);
+                        }
+                    }
+                    _ => panic!("Unexpected message {:?}", message),
                 }
-                _ => panic!("Unexpected message {:?}", message),
-            }
+
+                self.outbox.send::<SiActor>(SiPacket::Finish, time);
+                self.state = PifState::WaitCmd;
             }
         }
 
