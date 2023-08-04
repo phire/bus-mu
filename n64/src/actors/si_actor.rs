@@ -183,7 +183,7 @@ impl Handler<CpuRegWrite> for SiActor {
                 time64 = (time64 + 3) & !3;
                 time64 += 4 * 12; // The command packet is 11 bits long, with an extra start bit
 
-                println!("SI: Write {:08x} at {}", address, time64);
+                println!("SI: Write {:08x} = {:08x} at {}", address, data, time64);
 
                 match self.state {
                     SiState::Idle => {}

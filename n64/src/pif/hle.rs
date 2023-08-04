@@ -108,7 +108,7 @@ impl PifHle {
 
     pub fn main(&mut self, io: &mut dyn PifIO, time: Time) -> Time{
         let next_time = time.add(13653);
-        println!("PIF: main {:?} {:?}", self.state, time);
+        println!("PIF: main {:?} cmd: {:02x} @ {}", self.state, io.read_command(), time);
 
         match self.state {
 
@@ -147,7 +147,6 @@ impl PifHle {
                     // TODO: Joy init
                     self.state = State::WaitGetChecksum;
                 }
-
             }
             State::WaitGetChecksum => {
                 let current_command = io.read_command();
