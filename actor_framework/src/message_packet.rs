@@ -89,6 +89,16 @@ where
     ActorNames: MakeNamed,
     [(); ActorNames::COUNT]: ,
 {
+    pub fn is_some(&self) -> bool {
+        self.execute_fn.is_some()
+    }
+}
+
+impl<ActorNames, Message> MessagePacket<ActorNames, Message>
+where
+    ActorNames: MakeNamed,
+    [(); ActorNames::COUNT]: ,
+{
     pub fn new<Sender, Receiver>(time: Time, data: Message) -> Self
     where
         Receiver: Handler<Message> + Actor<ActorNames>,
@@ -149,6 +159,7 @@ where
 {
     type Sender;
     fn as_mut(&mut self) -> &mut MessagePacketProxy<ActorNames>;
+    fn as_ref(&self) -> &MessagePacketProxy<ActorNames>;
 }
 
 pub trait OutboxSend<ActorNames, Message>
@@ -183,6 +194,12 @@ macro_rules! make_outbox {
             $($i : core::mem::ManuallyDrop<actor_framework::MessagePacket<$name_type, $t>>),+
         }
 
+        impl $name {
+            fn is_empty(&self) -> bool {
+                unsafe { !self.none.is_some() }
+            }
+        }
+
         impl<ActorNames> actor_framework::Outbox<ActorNames> for $name
         where
             ActorNames: actor_framework::MakeNamed,
@@ -190,6 +207,9 @@ macro_rules! make_outbox {
         {
             type Sender = $sender;
             fn as_mut(&mut self) -> &mut actor_framework::MessagePacketProxy<ActorNames> {
+                unsafe { std::mem::transmute(self) }
+            }
+            fn as_ref(&self) -> &actor_framework::MessagePacketProxy<ActorNames> {
                 unsafe { std::mem::transmute(self) }
             }
         }
@@ -220,7 +240,7 @@ macro_rules! make_outbox {
             where
                 Receiver: actor_framework::Handler<$field_type> + actor_framework::Actor<$name_type>,
             {
-                //debug_assert!(self.none.execute_fn.is_none());
+                assert!(self.is_empty());
 
                 self.$field_ident = core::mem::ManuallyDrop::new(actor_framework::MessagePacket::new::<
                     <Self as actor_framework::Outbox<$name_type>>::Sender,
@@ -232,8 +252,8 @@ macro_rules! make_outbox {
             {
                 self.send::<Receiver>(message, time);
             }
-            fn send_channel(&mut self, channel: &actor_framework::Channel<$field_type, $name_type>, message: $field_type, time: Time) {
-                //debug_assert!(self.execute_fn.is_none());
+            fn send_channel(&mut self, channel: &actor_framework::Channel<$field_type, $name_type>, message: $field_type, time: Time)
+            {
                 self.$field_ident = core::mem::ManuallyDrop::new(channel.send(message, time));
             }
 
