@@ -73,15 +73,15 @@ fn scramble(buffer: &mut [u8])
 impl CicHle {
     pub fn new(cic_model: CIC) -> Self {
         let (region, seed, checksum) =  match cic_model {
-            CIC::Nus6101 => (Region::NTSC, 0x3d, 0x45cc73ee317a),
-            CIC::Nus6102 => (Region::NTSC, 0x3d, 0xa536c0f1d859),
+            CIC::Nus6101 => (Region::NTSC, 0x3f, 0x45cc73ee317a),
+            CIC::Nus6102 => (Region::NTSC, 0x3f, 0xa536c0f1d859),
+            CIC::Nus7101 => (Region::PAL,  0x3f, 0xa536c0f1d859),
+            CIC::Nus7102 => (Region::PAL,  0x3f, 0x44160ec5d9af),
             CIC::Nus6103 => (Region::NTSC, 0x78, 0x586fd4709867),
-            CIC::Nus6105 => (Region::NTSC, 0x91, 0x8618a45bc2d3),
-            CIC::Nus6106 => (Region::NTSC, 0x85, 0x2bbad4e6eb74),
-            CIC::Nus7101 => (Region::PAL,  0x3d, 0xa536c0f1d859),
-            CIC::Nus7102 => (Region::PAL,  0x3d, 0x44160ec5d9af),
             CIC::Nus7103 => (Region::PAL,  0x78, 0x586fd4709867),
+            CIC::Nus6105 => (Region::NTSC, 0x91, 0x8618a45bc2d3),
             CIC::Nus7105 => (Region::PAL,  0x91, 0x8618a45bc2d3),
+            CIC::Nus6106 => (Region::NTSC, 0x85, 0x2bbad4e6eb74),
             CIC::Nus7106 => (Region::PAL,  0x85, 0x2bbad4e6eb74),
             CIC::Nus8303 => (Region::NTSC, 0xdd, 0x32b294e2ab90),
             CIC::Nus8401 => (Region::NTSC, 0xdd, 0x6ee8d9e84970),

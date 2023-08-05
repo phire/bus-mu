@@ -47,7 +47,7 @@ impl Default for PifActor {
             enable_rom: true,
             pif_core: pif::PifHle::new(),
             pif_time: 0.into(),
-            cic_core: cic::CicHle::new(cic::CIC::Nus6101),
+            cic_core: cic::CicHle::new(cic::CIC::Nus6102),
         }
     }
 }

@@ -22,7 +22,7 @@ use actor_framework::Time;
 
 use super::{Dir, Size};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     Init,
     WaitLockout,
@@ -77,8 +77,8 @@ impl dyn PifIO + '_ {
 
 fn descramble(buffer: &mut [u8])
 {
-    for i in 1..buffer.len() {
-        buffer[i] = (buffer[i] + buffer[i - 1] + 1) & 0xf;
+    for i in (1..buffer.len()).rev() {
+        buffer[i] = buffer[i].wrapping_sub(buffer[i - 1] + 1) & 0xf;
     }
 }
 
@@ -102,13 +102,14 @@ impl PifHle {
             io.swap(0x25 + i, &mut self.internal_ram.os_info[i as usize]);
         }
         for i in 0..6 {
-            io.swap(0x28 + i, &mut self.internal_ram.cpu_checksum[i as usize]);
+            io.swap(0x32 + i, &mut self.internal_ram.cpu_checksum[i as usize]);
         }
     }
 
     pub fn main(&mut self, io: &mut dyn PifIO, time: Time) -> Time{
         let next_time = time.add(13653);
         println!("PIF: main {:?} cmd: {:02x} @ {}", self.state, io.read_command(), time);
+        let initial_state = self.state;
 
         match self.state {
 
@@ -136,6 +137,7 @@ impl PifHle {
                 self.internal_ram.os_info[0] = buf[0] << 4 | os_info;
                 self.internal_ram.os_info[1] = buf[2] << 4 | buf[3];
                 self.internal_ram.os_info[2] = buf[4] << 4 | buf[5];
+                assert!(self.internal_ram.os_info[2] == 0x3f);
                 self.swap_secrets(io);  //show osinfo+seeds in external memory
 
                 io.write_command(0x00);
@@ -150,38 +152,43 @@ impl PifHle {
             }
             State::WaitGetChecksum => {
                 let current_command = io.read_command();
-                if current_command & 0x80 != 0 {
+                if current_command & 0x20 != 0 {
                     self.swap_secrets(io);
                     io.write_command(current_command | 0x80);
+                    println!("   CPU checksum: {:x?}", self.internal_ram.cpu_checksum);
                     self.state = State::WaitCheckChecksum;
                 }
             }
             State::WaitCheckChecksum => {
-                if  true { // only on cold boot
-                    io.cic_poll();
-                    let mut buf = std::array::from_fn::<u8, 16, _>(|_| io.cic_read_nibble());
-                    for _ in 0..4 {
-                        descramble(&mut buf);
+                if io.read_command() & 0x40 != 0 {
+                    if  true { // only on cold boot
+                        io.cic_poll();
+                        let mut buf = std::array::from_fn::<u8, 16, _>(|_| io.cic_read_nibble());
+                        for _ in 0..4 {
+                            descramble(&mut buf);
+                        }
+                        for i in 0..6 {
+                            let hi = buf[i*2 + 4];
+                            let lo = buf[i*2 + 5];
+                            self.internal_ram.cic_checksum[i] = hi << 4 | lo;
+                        }
+                        self.internal_ram.os_info[0] |= 0x01; // warm boot (NMI) flag (ready in case a reset is made in the future)
                     }
-                    for i in 0..6 {
-                        let hi = buf[i*2 + 4];
-                        let lo = buf[i*2 + 5];
-                        self.internal_ram.cic_checksum[i] = hi << 4 | lo;
+
+                    if self.internal_ram.cic_checksum != self.internal_ram.cpu_checksum {
+                        println!("PIF: invalid CIC checksum");
+                        println!("   CPU checksum: {:x?}", self.internal_ram.cpu_checksum);
+                        println!("   CIC checksum: {:x?}", self.internal_ram.cic_checksum);
+                        self.state = State::Error;
+                        return next_time;
+                    } else {
+                        println!("PIF: CIC checksum OK");
                     }
-                    self.internal_ram.os_info[0] |= 0x01; // warm boot (NMI) flag (ready in case a reset is made in the future)
-                }
+                    self.internal_ram.cpu_checksum = [0; 6];
 
-                if self.internal_ram.cic_checksum != self.internal_ram.cpu_checksum {
-                    println!("PIF: invalid CIC checksum");
-                    println!("   CPU checksum: {:x?}", self.internal_ram.cpu_checksum);
-                    println!("   CIC checksum: {:x?}", self.internal_ram.cic_checksum);
-                    self.state = State::Error;
-                    return next_time;
+                    self.state = State::WaitTerminateBoot;
+                    self.internal_ram.boot_timeout = time.add(6 * (250000000 / 4));  //6 seconds
                 }
-                self.internal_ram.cpu_checksum = [0; 6];
-
-                self.state = State::WaitTerminateBoot;
-                self.internal_ram.boot_timeout = time.add(6 * (250000000 / 4));  //6 seconds
             }
             State::WaitTerminateBoot => {
                 if io.read_command() & 0x08 != 0 {
@@ -201,6 +208,10 @@ impl PifHle {
 
             State::Error => todo!("Reset the CPu"),
         }
+        if initial_state != self.state {
+            println!("PIF: state {:?} -> {:?}", initial_state, self.state);
+        }
+
         return next_time;
     }
 
