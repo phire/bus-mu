@@ -239,7 +239,7 @@ impl CpuActor {
         }
     }
 
-    fn do_rspmem(&mut self, reason: vr4300::Reason, time: Time) {
+    fn do_rspmem(&mut self, reason: vr4300::Reason, time: Time, limit: Time) {
         let mem = match reason.address() & 0x1000 == 0 {
             true => self.dmem.as_mut(),
             false => self.imem.as_mut(),
@@ -251,11 +251,11 @@ impl CpuActor {
             match reason {
                 vr4300::Reason::BusRead32(_, _) => {
                     let data = mem[offset];
-                    self.recv(ReadFinished::word(data), time, time);
+                    self.recv(ReadFinished::word(data), time, limit);
                 }
                 vr4300::Reason::BusWrite32(_, _, data) => {
                     mem[offset] = data;
-                    self.recv(WriteFinished::word(), time, time);
+                    self.recv(WriteFinished::word(), time, limit);
                 }
                 _ => { panic!("unexpected bus operation") }
             }
@@ -268,7 +268,7 @@ impl CpuActor {
 }
 
 impl Handler<BusAccept> for CpuActor {
-    fn recv(&mut self, _: BusAccept, time: Time, _limit: Time) -> SchedulerResult {
+    fn recv(&mut self, _: BusAccept, time: Time, limit: Time) -> SchedulerResult {
         let reason = self.outstanding_mem_request.clone().unwrap();
         let address = reason.address();
 
@@ -279,11 +279,11 @@ impl Handler<BusAccept> for CpuActor {
             0x0400_0000 => match address & 0x040c_0000 { // RSP
                 0x0400_0000 if address & 0x1000 == 0 => { // DMEM Direct access
                     //println!("DMEM access {}", reason);
-                    self.do_rspmem(reason, time);
+                    self.do_rspmem(reason, time, limit);
                 }
                 0x0400_0000 if address & 0x1000 != 0 => { // IMEM Direct access
                     //println!("IMEM access {}", reason);
-                    self.do_rspmem(reason, time);
+                    self.do_rspmem(reason, time, limit);
                 }
                 0x0404_0000 | 0x0408_0000 => { // RSP Register
                     self.do_reg::<RspActor>(reason, time);
@@ -427,13 +427,13 @@ impl WriteFinished {
 }
 
 impl Handler<rsp_actor::TransferMemOwnership> for CpuActor {
-    fn recv(&mut self, message: rsp_actor::TransferMemOwnership, time: Time, _limit: Time) -> SchedulerResult {
+    fn recv(&mut self, message: rsp_actor::TransferMemOwnership, time: Time, limit: Time) -> SchedulerResult {
         self.imem = Some(message.imem);
         self.dmem = Some(message.dmem);
 
         // We can now complete the memory request to imem or dmem
         let reason = self.outstanding_mem_request.clone().unwrap();
-        self.do_rspmem(reason, time);
+        self.do_rspmem(reason, time, limit);
 
         SchedulerResult::Ok
     }
