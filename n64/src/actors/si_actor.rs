@@ -7,6 +7,7 @@ pub struct SiActor {
     outbox: SiOutbox,
     buffer: [u32; 16],
     state: SiState,
+    next_state: SiState,
     dram_address: u32,
     dma_active: bool,
     error: bool,
@@ -19,6 +20,7 @@ impl Default for SiActor {
             outbox: Default::default(),
             buffer: [0; 16],
             state: SiState::Idle,
+            next_state: SiState::Idle,
             dram_address: 0,
             dma_active: false,
             error: false,
@@ -88,6 +90,10 @@ impl Handler<CpuRegRead> for SiActor {
                         };
                         let io_busy = match  self.state {
                             SiState::CpuRead | SiState::CpuWrite => 1,
+                            SiState::WaitAck => match self.next_state {
+                                SiState::CpuRead | SiState::CpuWrite => 1,
+                                _ => 0,
+                            }
                             _ => 0,
                         };
                         let value = 0
@@ -116,12 +122,31 @@ impl Handler<CpuRegRead> for SiActor {
                 time64 = (time64 + 3) & !3;
                 time64 += 4 * 12; // The command packet is 11 bits long, with an extra start bit
 
-                println!("PIF Read {:08x} at {}", address, time64);
+                println!("SI: PIF Read {:08x} at {}", address, time64);
                 match self.state {
                     SiState::Idle => {}
+                    SiState::WaitAck => {
+                        println!("SI: PIF Read {:08x} stomped previous {:?}", address, self.next_state);
+                        if !self.outbox.contains::<SiPacket>() {
+                            // This new operation is happening after PIF has received the previous
+                            // command packet, but before PIF has acked it (the SM5 core is still
+                            // running INTA)
+                            // IPL2 appears to do this @ 0xa40015ec
+                            self.state = SiState::Idle;
+
+                            // HWTEST: I think this just results in stamping over previous operation
+                            //         (Which is how ares emulates it)
+                        } else {
+                            // HWTEST: What should happen here?
+                            //         I'm guessing SI just starts transmitting the new command packet
+                            //         which corrupts the old one
+                            unimplemented!("SI: is still sending command packet");
+                        }
+                    }
                     _ => panic!("SI is busy")
                 }
-                self.state = SiState::CpuRead;
+                self.next_state = SiState::CpuRead;
+                self.state = SiState::WaitAck;
 
                 self.outbox.send::<PifActor>(SiPacket::Read4(pif_address), time64.into());
             }
@@ -151,7 +176,7 @@ impl Handler<CpuRegWrite> for SiActor {
                         self.dram_address = data;
                     }
                     0x04 => { // SI PIF read64
-                        self.state = SiState::DmaRead(16);
+                        self.next_state = SiState::DmaRead(16);
                         unimplemented!()
                     }
                     0x08 => { // SI PIF write4
@@ -161,7 +186,7 @@ impl Handler<CpuRegWrite> for SiActor {
                         unimplemented!()
                     }
                     0x10 => { // SI PIF write 64
-                        self.state = SiState::DmaWrite(16);
+                        self.next_state = SiState::DmaWrite(16);
                         unimplemented!()
                     }
                     0x14 => { // SI PIF read 4
@@ -187,7 +212,8 @@ impl Handler<CpuRegWrite> for SiActor {
 
                 println!("SI: Write {:08x} = {:08x} at {}", address, data, time64);
 
-                self.state = SiState::CpuWrite;
+                self.next_state = SiState::CpuWrite;
+                self.state = SiState::WaitAck;
                 self.buffer[15] = data;
 
                 // Queue this message for after we finish telling the cpu it's write finished
@@ -223,15 +249,21 @@ impl Handler<SiPacket> for SiActor {
         match message {
             SiPacket::Ack => { // PIF ready to receive our write data
                 req_time = time.add(4);
-                match self.state {
-                    SiState::CpuRead | SiState::DmaRead(_) => {
+                self.state = match self.next_state {
+                    SiState::CpuRead => {
                         self.outbox.send::<PifActor>(SiPacket::Ack, req_time);
+                        SiState::CpuRead
                     }
                     SiState::CpuWrite => {
                         self.outbox.send::<PifActor>(SiPacket::Data4(self.buffer[15]), req_time);
+                        SiState::CpuWrite
+                    }
+                    SiState::DmaRead(count) => {
+                        self.outbox.send::<PifActor>(SiPacket::Ack, req_time);
+                        SiState::DmaRead(count)
                     }
                     _ => unimplemented!()
-                }
+                };
                 return SchedulerResult::Ok;
             }
             SiPacket::Data4(data) => { // 4 byte read finished
@@ -257,12 +289,14 @@ impl Handler<SiPacket> for SiActor {
     }
 }
 
+#[derive(Debug)]
 enum SiState {
     CpuRead,
     CpuWrite,
     DmaRead(u8),
     DmaWrite(u8),
     Idle,
+    WaitAck,
 }
 
 impl Handler<BusAccept> for SiActor {
@@ -301,7 +335,7 @@ impl Handler<BusAccept> for SiActor {
                 unimplemented!("Read from RDRAM {}", count);
                 //SiState::DmaWrite(count-1)
             }
-            SiState::Idle => {
+            SiState::Idle | SiState::WaitAck => {
                 unreachable!()
             }
         };
