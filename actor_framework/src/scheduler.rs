@@ -7,6 +7,20 @@ pub struct Scheduler<ActorNames> where
     [(); ActorNames::COUNT]:
 {
     actors: ObjectStore<ActorNames>,
+    count: u64,
+    zero_limit_count: u64,
+}
+
+impl<ActorNames> Drop for Scheduler<ActorNames>
+where
+    ActorNames: MakeNamed,
+    usize: From<ActorNames>,
+    [(); ActorNames::COUNT]:
+{
+    fn drop(&mut self) {
+        eprintln!("Scheduler ran {} times", self.count);
+        eprintln!(" with {} zero limits", self.zero_limit_count);
+    }
 }
 
 impl<ActorNames> Scheduler<ActorNames> where
@@ -18,6 +32,8 @@ ActorNames: MakeNamed,
     pub fn new() -> Scheduler<ActorNames> {
         Scheduler {
             actors: ObjectStore::new(),
+            count: 0,
+            zero_limit_count: 0,
         }
     }
 
@@ -43,6 +59,8 @@ ActorNames: MakeNamed,
     }
 
     fn run_inner(&mut self, sender_id: ActorNames, limit: Time) -> SchedulerResult {
+        self.count += 1;
+
          // PERF: Going though this trait object is potentially problematic for performance.
         //        Might need to look into Arbitrary Self Types or another nasty unsafe hack
         let message = &mut self.actors.get_id(sender_id).get_message();
@@ -85,6 +103,7 @@ ActorNames: MakeNamed,
     pub fn run_zero_limit(&mut self, time: Time) -> Option<Box<dyn std::error::Error>> {
         // We might need to go though multiple iterations before this settles
         for _ in 0..(ActorNames::COUNT * 3) {
+            self.zero_limit_count += 1;
             for actor in ActorNames::iter() {
                 let message = self.actors.get_id(actor).get_message();
 

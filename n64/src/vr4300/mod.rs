@@ -37,6 +37,7 @@ pub struct Core {
     itlb: ITlb,
     //bus: SysADBus,
     queued_flush: Option<(u32, [u8; 16])>,
+    count: u64,
 }
 
 impl Core {
@@ -89,7 +90,7 @@ impl Core {
                     }
                 }
                 ExitReason::Mem(MemoryReq::UncachedDataWrite(addr, size, data)) => {
-                    println!("Uncached data write: {:08x} ({} bytes) = {:08x}", addr, size, data);
+                    //println!("Uncached data write: {:08x} ({} bytes) = {:08x}", addr, size, data);
                     match size {
                         1 => Reason::BusWrite8(RequestType::UncachedWrite, addr, data as u32),
                         2 => Reason::BusWrite16(RequestType::UncachedWrite, addr, data as u32),
@@ -121,10 +122,11 @@ impl Core {
         let response = match request_type {
             RequestType::UncachedInstructionRead => {
                 let word = data[0];
-                let (inst, _inst_info) = instructions::decode(word);
-                let addr = self.pipeline.pc();
-                println!("(uncached) {:04x}: {:08x}    {}", addr, word, inst.disassemble(addr as u64));
-                MemoryResponce::UncachedInstructionRead(data[0])
+                //let (inst, _inst_info) = instructions::decode(word);
+                //let addr = self.pipeline.pc();
+                //println!("(uncached) {:04x}: {:08x}    {}", addr, word, inst.disassemble(addr as u64));
+                self.count += 1;
+                MemoryResponce::UncachedInstructionRead(word)
             }
             RequestType::DCacheFill => {
                 mem_req = self.queued_flush.take().map(|(addr, data)| {
@@ -185,7 +187,14 @@ impl Default for Core {
             dcache: DCache::new(),
             itlb: ITlb::new(),
             queued_flush: None,
+            count: 0,
         }
+    }
+}
+
+impl Drop for Core {
+    fn drop(&mut self) {
+        eprintln!("Core executed {} instructions", self.count);
     }
 }
 

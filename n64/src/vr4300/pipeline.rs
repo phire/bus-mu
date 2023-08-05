@@ -202,7 +202,7 @@ impl Pipeline {
                     _ => {
                         // For some reason... branch likely instructions invalidate the branch-delay
                         // slot's instruction if they aren't taken... Which is backwards
-                        println!("Skipping instruction {:?}", self.rf.ex_mode);
+                        //println!("Skipping instruction {:?}", self.rf.ex_mode);
                         self.ex.skip_next = false;
                         self.ex.next_pc = self.rf.next_pc;
                     }
