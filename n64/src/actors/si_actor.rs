@@ -12,6 +12,7 @@ pub struct SiActor {
     dma_active: bool,
     error: bool,
     queued_message: Option<(Time, SiPacket)>,
+    queued_read: Option<u16>,
 }
 
 impl Default for SiActor {
@@ -25,6 +26,7 @@ impl Default for SiActor {
             dma_active: false,
             error: false,
             queued_message: None,
+            queued_read: None,
         }
     }
 }
@@ -56,6 +58,21 @@ impl Actor<N64Actors> for SiActor {
 impl SiActor {
     fn bus_request(&mut self, time: Time) {
         self.outbox.send::<BusActor>(BusRequest::new::<Self>(1), time);
+    }
+
+    fn pif_read(&mut self, pif_addr: u16, time: Time) {
+        let mut time64 : u64 = time.into();
+
+        // align with 4 cycle boundary
+        time64 = (time64 + 3) & !3;
+        time64 += 4 * 12; // The command packet is 11 bits long, with an extra start bit
+
+        println!("SI: PIF Read {:08x} at {}", pif_addr, time64);
+
+        self.next_state = SiState::CpuRead;
+        self.state = SiState::WaitAck;
+
+        self.outbox.send::<PifActor>(SiPacket::Read4(pif_addr), time64.into());
     }
 }
 
@@ -116,39 +133,23 @@ impl Handler<CpuRegRead> for SiActor {
             }
             0x1fc0_0000..=0x1fc0_07ff => { // PIF ROM/RAM
                 let pif_address = (address >> 2) as u16 & 0x1ff;
-                let mut time64 : u64 = time.into();
 
-                // align with 4 cycle boundary
-                time64 = (time64 + 3) & !3;
-                time64 += 4 * 12; // The command packet is 11 bits long, with an extra start bit
-
-                println!("SI: PIF Read {:08x} at {}", address, time64);
                 match self.state {
-                    SiState::Idle => {}
-                    SiState::WaitAck => {
-                        println!("SI: PIF Read {:08x} stomped previous {:?}", address, self.next_state);
-                        if !self.outbox.contains::<SiPacket>() {
-                            // This new operation is happening after PIF has received the previous
-                            // command packet, but before PIF has acked it (the SM5 core is still
-                            // running INTA)
-                            // IPL2 appears to do this @ 0xa40015ec
-                            self.state = SiState::Idle;
-
-                            // HWTEST: I think this just results in stamping over previous operation
-                            //         (Which is how ares emulates it)
-                        } else {
-                            // HWTEST: What should happen here?
-                            //         I'm guessing SI just starts transmitting the new command packet
-                            //         which corrupts the old one
-                            unimplemented!("SI: is still sending command packet");
-                        }
+                    SiState::Idle => {
+                        self.pif_read(pif_address, time);
                     }
-                    _ => panic!("SI is busy")
-                }
-                self.next_state = SiState::CpuRead;
-                self.state = SiState::WaitAck;
+                    _ => {
+                        // Hardware tests indicate PIF will block reads until the previous write finishes.
+                        // thanks Tharo - https://discord.com/channels/205520502922543113/768169699564453910/1137213783564099584
+                        //
+                        // Though IPL2 gets very paranoid when doing this, sometimes inserting NOPS, sometimes
+                        // inserting delay loops and sometimes polling the IO_BUSY status bit... so maybe
+                        // there is a potential hardware bug around here. Or there was on a previous silicon version.
 
-                self.outbox.send::<PifActor>(SiPacket::Read4(pif_address), time64.into());
+                        println!("SI: PIF Read {:08x} Blocked on write", address);
+                        self.queued_read = Some(pif_address);
+                    }
+                }
             }
             0x1fc0_0800..=0x1fcf_ffff => {
                 // Reserved SI range... not sure what should happen here
@@ -278,7 +279,11 @@ impl Handler<SiPacket> for SiActor {
                 self.dma_active = true;
             }
             SiPacket::Finish => {
-                self.state = SiState::Idle;
+                if let Some(pif_addr) = self.queued_read {
+                    self.pif_read(pif_addr, time);
+                } else {
+                    self.state = SiState::Idle;
+                }
                 return SchedulerResult::Ok;
             }
             _ => panic!("Invalid message")

@@ -96,6 +96,7 @@ impl PifActor {
     }
 }
 
+#[derive(Debug)]
 enum PifState {
     WaitCmd,
     WaitAck,
@@ -111,17 +112,7 @@ impl Handler<SiPacket> for PifActor {
         if self.outbox.contains::<SiPacket>() {
             let (old_time, old_msg) : (_, SiPacket) = self.outbox.cancel();
 
-            match old_msg {
-                SiPacket::Ack => {
-                    // SI has send us a new command packet before we've finished ACKing the last one
-                    // IPL2 appears to do this @ 0xa40015ec
-
-                    // HWTEST: For now, I'm just implementing this as cleanly replacing the old message
-                    //         Though I suspect it doesn't actually re-trigger the interrupt
-                    self.state = PifState::WaitCmd;
-                }
-                _ => { panic!("PIF: {:?} stompted {:?} @ {}", message, old_msg, old_time) }
-            }
+            panic!("PIF: {:?} stompted {:?} during {:?} @ {}", message, old_msg, self.state, old_time);
         }
 
         match self.state {
