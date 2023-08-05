@@ -6,8 +6,8 @@ pub struct RspActor {
     outbox: RspOutbox,
     halted: bool,
     dma_busy: bool,
-    imem: Option<Box<[u32; 512]>>,
-    dmem: Option<Box<[u32; 512]>>,
+    imem: Option<Box<[u32; 1024]>>,
+    dmem: Option<Box<[u32; 1024]>>,
 }
 
 make_outbox!(
@@ -26,8 +26,8 @@ impl Default for RspActor {
             //         enter the halted state immediately on a soft reset.
             halted: true,
             dma_busy: false,
-            imem: Some(Box::new([0; 512])),
-            dmem: Some(Box::new([0; 512])),
+            imem: Some(Box::new([0; 1024])),
+            dmem: Some(Box::new([0; 1024])),
         }
     }
 }
@@ -164,8 +164,8 @@ impl Handler<CpuRegWrite> for RspActor {
 pub(super) struct ReqestMemOwnership {}
 
 pub(super) struct TransferMemOwnership {
-    pub imem: Box<[u32; 512]>,
-    pub dmem: Box<[u32; 512]>,
+    pub imem: Box<[u32; 1024]>,
+    pub dmem: Box<[u32; 1024]>,
 }
 
 impl Handler<TransferMemOwnership> for RspActor {

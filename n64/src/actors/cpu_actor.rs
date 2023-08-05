@@ -11,8 +11,8 @@ pub struct CpuActor {
     committed_time: Time,
     _cpu_overrun: u32,
     cpu_core: vr4300::Core,
-    imem: Option<Box<[u32; 512]>>,
-    dmem: Option<Box<[u32; 512]>>,
+    imem: Option<Box<[u32; 1024]>>,
+    dmem: Option<Box<[u32; 1024]>>,
     outstanding_mem_request: Option<vr4300::Reason>,
     bus_free: Time,
 }
@@ -27,6 +27,8 @@ actor_framework::make_outbox!(
         return_rsp_mem: rsp_actor::TransferMemOwnership,
         pi_read: pi_actor::PiRead,
         pi_write: pi_actor::PiWrite,
+        read_finished: ReadFinished,
+        write_finished: WriteFinished,
     }
 );
 
@@ -128,7 +130,7 @@ impl CpuActor {
 
     fn finish_mem(&mut self, mem_finished: MemFinished, time: Time, limit: Time) -> SchedulerResult {
         let request = self.outstanding_mem_request.take().unwrap();
-        //println!("CPU: Finishing {:} at {:}", request, time);
+        //println!("CPU: Finishing {:} = {:x?} at {:}", request, mem_finished, time);
 
         assert!((u64::from(time) - u64::from(self.committed_time)) >= 1, "mem finished too fast");
 
@@ -239,12 +241,12 @@ impl CpuActor {
 
     fn do_rspmem(&mut self, reason: vr4300::Reason, time: Time) {
         let mem = match reason.address() & 0x1000 == 0 {
-            true => self.imem.as_mut(),
-            false => self.dmem.as_mut(),
+            true => self.dmem.as_mut(),
+            false => self.imem.as_mut(),
         };
 
         if let Some(mem) = mem {
-            let offset = ((reason.address() >> 2) & 0x1ff) as usize;
+            let offset = ((reason.address() >> 2) & 0x3ff) as usize;
 
             match reason {
                 vr4300::Reason::BusRead32(_, _) => {
@@ -349,6 +351,7 @@ pub enum CpuLength {
     OctWord = 8,
 }
 
+#[derive(Debug)]
 pub struct ReadFinished {
     length: CpuLength,
     pub data: [u32; 8]
@@ -385,10 +388,12 @@ impl ReadFinished {
     }
 }
 
+#[derive(Debug)]
 pub struct WriteFinished {
     length: CpuLength
 }
 
+#[derive(Debug)]
 enum MemFinished {
     Read(ReadFinished),
     Write(WriteFinished)
