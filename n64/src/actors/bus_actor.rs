@@ -1,4 +1,4 @@
-use std::collections::BinaryHeap;
+use std::{collections::BinaryHeap, pin::Pin};
 
 use actor_framework::*;
 use super::N64Actors;
@@ -87,7 +87,7 @@ impl Handler<BusRequest> for BusActor {
         if self.queue.is_empty() && self.commited_time < time {
             // There are no outstanding requests, so we can just accept this one
             self.commited_time = time;
-            self.outbox.send_channel(&message.channel, BusAccept { }, time.add(1));
+            self.outbox.send_channel(message.channel.clone(), BusAccept { }, time.add(1));
             self.queue.push(message);
         } else {
             let new_piority = message.piority;
@@ -101,8 +101,9 @@ impl Handler<BusRequest> for BusActor {
                 // Note: All priorities should be unique per sender, and they are only allowed one outstanding request
                 //       So we can just compare priorities
                 if highest.piority == new_piority {
+                    let channel = highest.channel.clone();
                     // This request takes priority
-                    self.outbox.send_channel(&highest.channel, BusAccept { }, time.add(1));
+                    self.outbox.send_channel(channel, BusAccept { }, time.add(1));
                 }
             }
         }
@@ -111,11 +112,11 @@ impl Handler<BusRequest> for BusActor {
 }
 
 impl Actor<N64Actors> for BusActor {
-    fn get_message(&mut self) -> &mut MessagePacketProxy<N64Actors> {
-        self.outbox.as_mut()
+    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut MessagePacketProxy<N64Actors>> {
+        unsafe { self.map_unchecked_mut(|s| s.outbox.as_mut()) }
     }
 
-    fn message_delivered(&mut self, _time: Time) {
+    fn message_delivered(mut self: Pin<&mut Self>, _time: Time) {
         let request = self.queue.pop().unwrap();
         // Increment time to end of delivered request
         self.commited_time = self.commited_time.add(request.count.into());
@@ -123,7 +124,10 @@ impl Actor<N64Actors> for BusActor {
 
         // Process next request
         if let Some(request) = self.queue.peek() {
-            self.outbox.send_channel(&request.channel, BusAccept { }, self.commited_time.add(1));
+            let channel = request.channel.clone();
+            let accept_time = self.commited_time.add(1);
+
+            self.outbox.send_channel(channel, BusAccept { }, accept_time);
         }
     }
 }

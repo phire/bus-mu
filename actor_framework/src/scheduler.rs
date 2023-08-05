@@ -1,12 +1,13 @@
 
-use crate::{object_map::ObjectStore, Time, Actor, MakeNamed};
+use crate::{object_map::{ObjectStore, ActorStore}, Time, Actor, MakeNamed};
 
 pub struct Scheduler<ActorNames> where
     ActorNames: MakeNamed,
+    <ActorNames as MakeNamed>::Base: Actor<ActorNames>,
     usize: From<ActorNames>,
     [(); ActorNames::COUNT]:
 {
-    actors: ObjectStore<ActorNames>,
+    actors: ActorStore<ActorNames>,
     count: u64,
     zero_limit_count: u64,
 }
@@ -14,6 +15,7 @@ pub struct Scheduler<ActorNames> where
 impl<ActorNames> Drop for Scheduler<ActorNames>
 where
     ActorNames: MakeNamed,
+    <ActorNames as MakeNamed>::Base: Actor<ActorNames>,
     usize: From<ActorNames>,
     [(); ActorNames::COUNT]:
 {
@@ -30,7 +32,7 @@ ActorNames: MakeNamed,
     [(); ActorNames::COUNT]:,
  {
     pub fn new() -> Scheduler<ActorNames> {
-        let actors = ObjectStore::new();
+        let actors = ActorStore::new();
         Scheduler {
             actors,
             count: 0,
@@ -46,7 +48,7 @@ ActorNames: MakeNamed,
         // PERF: I'm hoping this should compile down into SIMD optimized branchless code
         //       But that might require moving away from trait objects
         for actor in ActorNames::iter() {
-            let message = self.actors.get_id(actor).get_message();
+            let message = self.actors.outbox(actor);
 
             let time = message.time.lower_bound();
             if time < min {
@@ -64,11 +66,11 @@ ActorNames: MakeNamed,
 
          // PERF: Going though this trait object is potentially problematic for performance.
         //        Might need to look into Arbitrary Self Types or another nasty unsafe hack
-        let message = &mut self.actors.get_id(sender_id).get_message();
+        let message = self.actors.outbox(sender_id);
 
         //println!("Running actor {:?} at time {:?}", sender_id, message.time);
 
-        (message.execute_fn)(sender_id, &mut self.actors, limit)
+        (message.execute_fn)(sender_id, self.actors.obj_store(), limit)
     }
 
     #[inline(never)]
@@ -105,7 +107,7 @@ ActorNames: MakeNamed,
         for _ in 0..(ActorNames::COUNT * 3) {
             self.zero_limit_count += 1;
             for actor in ActorNames::iter() {
-                let message = self.actors.get_id(actor).get_message();
+                let message = self.actors.outbox(actor);
 
                 if message.time.lower_bound() == time {
                     let result = self.run_inner(actor, time);

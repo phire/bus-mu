@@ -41,6 +41,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
 
     let mut make_patterns = Vec::new();
     let mut from_patterns = Vec::new();
+    let mut size_patterns = Vec::new();
 
     let mut classes = Vec::new();
     for variant in named_enum.data.take_enum().unwrap() {
@@ -49,10 +50,13 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
         let id = make_patterns.len();
 
         make_patterns.push(quote! {
-            #ident::#name => Box::new(#class_path::default()),
+            #ident::#name => Box::pin(#class_path::default()),
         });
         from_patterns.push(quote! {
             #id => #class_path::name(),
+        });
+        size_patterns.push(quote! {
+            #ident::#name => core::mem::size_of::<#class_path>(),
         });
 
         classes.push(quote! {
@@ -76,9 +80,14 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
             type Base = dyn #base<#ident>;
             type ExitReason = Box<dyn #exit_reason>;
 
-            fn make(id: Self) -> Box<Self::Base> {
+            fn make(id: Self) -> std::pin::Pin<Box<Self::Base>> {
                 match id {
                     #(#make_patterns)*
+                }
+            }
+            fn size_of(id: Self) -> usize {
+                match id {
+                    #(#size_patterns)*
                 }
             }
         }

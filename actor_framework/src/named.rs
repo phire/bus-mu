@@ -1,6 +1,6 @@
 // TODO: Think of better name for named
 
-use std::marker::PhantomData;
+use std::{marker::PhantomData, pin::Pin};
 
 pub trait Named<E> {
     fn name() -> E where Self: Sized;
@@ -19,7 +19,9 @@ pub trait MakeNamed : From<usize> + Into<usize> + PartialEq + Copy + 'static + s
         }
     }
 
-    fn make(id: Self) -> Box<Self::Base>;
+    fn make(id: Self) -> Pin<Box<Self::Base>>;
+
+    fn size_of(id: Self) -> usize;
 }
 
 pub struct NamedIterator<E> {

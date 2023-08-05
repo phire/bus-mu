@@ -3,6 +3,7 @@
 #![feature(generic_const_exprs)]
 
 #![feature(associated_type_defaults)]
+#![feature(ptr_metadata)]
 
 mod addr;
 mod channel;
@@ -23,13 +24,15 @@ pub use message_packet::{Outbox, OutboxSend};
 pub use scheduler::{Scheduler, SchedulerResult};
 pub use enum_map::EnumMap;
 
+use std::pin::Pin;
+
 pub trait Actor<ActorNames> : Named<ActorNames>
 where
     ActorNames: MakeNamed,
     [(); ActorNames::COUNT]:
 {
-    fn get_message(&mut self) -> &mut MessagePacketProxy<ActorNames>;
-    fn message_delivered(&mut self, time: Time);
+    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut MessagePacketProxy<ActorNames>>;
+    fn message_delivered(self: Pin<&mut Self>, time: Time);
 }
 
 pub trait Handler<M>

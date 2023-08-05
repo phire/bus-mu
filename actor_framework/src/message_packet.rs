@@ -1,6 +1,6 @@
 
 
-use std::{mem::{MaybeUninit, ManuallyDrop}, any::TypeId};
+use std::{mem::{MaybeUninit, ManuallyDrop}, any::TypeId, pin::{Pin, pin}};
 
 use crate::{object_map::ObjectStore, MakeNamed, Time, Handler, Actor, Addr, Channel, SchedulerResult};
 
@@ -51,9 +51,13 @@ where
         packet.take()
     };
 
+    let receiver = unsafe {
+        map.get::<Receiver>().get_unchecked_mut()
+    };
+
     //println!("direct_execute: {:?} {:?}", Receiver::name(), time);
 
-    let result = map.get::<Receiver>().recv(message, time, limit);
+    let result = receiver.recv(message, time, limit);
     map.get::<Sender>().message_delivered(time);
 
     result
@@ -75,7 +79,11 @@ where
         packet.take()
     };
 
-    let result = map.get::<Receiver>().recv(message, time, limit);
+    let receiver = unsafe {
+        map.get::<Receiver>().get_unchecked_mut()
+    };
+
+    let result = receiver.recv(message, time, limit);
     map.get_id(sender_id).message_delivered(time);
 
     result
@@ -220,7 +228,7 @@ where
     fn send_addr<Receiver>(&mut self, addr: &Addr<Receiver, ActorNames>, message: Message, time: Time)
     where
         Receiver: Handler<Message> + Actor<ActorNames>;
-    fn send_channel(&mut self, channel: &Channel<Message, ActorNames>, message: Message, time: Time);
+    fn send_channel(&mut self, channel: Channel<Message, ActorNames>, message: Message, time: Time);
     fn cancel(&mut self) -> (Time, Message);
 }
 
@@ -341,7 +349,7 @@ macro_rules! make_outbox {
                 self.send::<Receiver>(message, time);
             }
 
-            fn send_channel(&mut self, channel: &actor_framework::Channel<$field_type, $name_type>, message: $field_type, time: Time)
+            fn send_channel(&mut self, channel: actor_framework::Channel<$field_type, $name_type>, message: $field_type, time: Time)
             {
                 self.$field_ident = core::mem::ManuallyDrop::new(channel.send(message, time));
             }

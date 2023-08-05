@@ -23,6 +23,16 @@ impl<T, E> EnumMap<T, E>
         }
     }
 
+    pub fn from_fn<F>(mut f: F) -> EnumMap<T, E>
+    where
+        F: FnMut(E) -> T,
+        usize: From<E>,
+    {
+        EnumMap {
+            contents: std::array::from_fn(|i| f(E::from(i)))
+        }
+    }
+
     /// Returns the iter of this [`EnumMap<T, E>`].
     pub fn iter(&self) -> EnumMapIterator<T, E> {
         EnumMapIterator {

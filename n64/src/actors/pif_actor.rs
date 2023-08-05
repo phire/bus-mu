@@ -1,3 +1,5 @@
+use std::pin::Pin;
+
 /// PifActor: Emulates the SI (Serial Interface) and the connected PIF
 
 
@@ -53,12 +55,13 @@ impl Default for PifActor {
 }
 
 impl Actor<N64Actors> for PifActor {
-    fn get_message(&mut self) -> &mut actor_framework::MessagePacketProxy<N64Actors> {
-        self.outbox.as_mut()
+    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut actor_framework::MessagePacketProxy<N64Actors>> {
+        unsafe { self.map_unchecked_mut(|s| s.outbox.as_mut()) }
     }
 
-    fn message_delivered(&mut self, _: Time) {
-        self.outbox.send::<Self>(PifHleMain{}, self.pif_time);
+    fn message_delivered(mut self: Pin<&mut Self>, _: Time) {
+        let time = self.pif_time;
+        self.outbox.send::<Self>(PifHleMain{}, time);
     }
 }
 
@@ -147,8 +150,16 @@ impl Handler<SiPacket> for PifActor {
                     _ => panic!("Unexpected message"),
                 };
 
-                let (pif_core, mut io) = PifHleIoProxy::split(self);
-                pif_core.interrupt_a(&mut io, dir, size);
+                //let (pif_core, mut io) = PifHleIoProxy::split(self);
+                let enable_rom = &mut self.enable_rom;
+                let cic_core = &mut self.cic_core;
+
+                let mut io = PifHleIoProxy {
+                    pif_mem: &mut self.pif_mem,
+                    enable_rom: enable_rom,
+                    cic_core: cic_core,
+                };
+                self.pif_core.interrupt_a(&mut io, dir, size);
 
                 // HWTEST: UltraPIF inserts a 4 cycle delay here
                 //         But n64-systembench indicates it's more like 1800 cycles
@@ -200,7 +211,7 @@ struct PifHleIoProxy<'a> {
 }
 
 impl<'a> PifHleIoProxy<'a> {
-    fn split(actor: &'a mut PifActor) ->  (&mut pif::PifHle, Self) {
+    fn split(actor: &'a mut PifActor) ->  (&'a mut pif::PifHle, PifHleIoProxy<'a>) {
         let io = PifHleIoProxy {
             pif_mem: &mut actor.pif_mem,
             enable_rom: &mut actor.enable_rom,

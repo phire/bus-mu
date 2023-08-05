@@ -1,4 +1,6 @@
 
+use std::pin::Pin;
+
 use actor_framework::{Time, Actor, MessagePacketProxy, Handler, Outbox, OutboxSend, SchedulerResult};
 
 use super::{N64Actors, bus_actor::{BusAccept, BusRequest, BusActor}, cpu_actor::{CpuRegRead, CpuActor, ReadFinished, CpuRegWrite, WriteFinished}, pif_actor::PifActor};
@@ -41,11 +43,11 @@ actor_framework::make_outbox!(
 );
 
 impl Actor<N64Actors> for SiActor {
-    fn get_message(&mut self) -> &mut MessagePacketProxy<N64Actors> {
-        self.outbox.as_mut()
+    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut MessagePacketProxy<N64Actors>> {
+        unsafe { self.map_unchecked_mut(|s| s.outbox.as_mut()) }
     }
 
-    fn message_delivered(&mut self, time: Time) {
+    fn message_delivered(mut self: Pin<&mut Self>, time: Time) {
         if let Some((msg_time, message)) = self.queued_message.take() {
             println!("Si: sending queued message {:?} to time {} at {}", message, u64::from(msg_time), time);
             self.outbox.send::<PifActor>(message, msg_time);

@@ -16,6 +16,7 @@ impl<A, ActorNames> Addr<A, ActorNames>
     }
 }
 
+#[derive(Copy)]
 pub struct Channel<M, ActorNames>
     where ActorNames: MakeNamed,
         [(); ActorNames::COUNT]:,
@@ -24,6 +25,19 @@ pub struct Channel<M, ActorNames>
 {
     channel_fn: fn (time: Time, message: M) -> MessagePacket<ActorNames, M>,
     //actor_name: ActorNames,
+}
+
+impl<M, ActorNames> Clone for Channel<M, ActorNames>
+    where ActorNames: MakeNamed,
+        [(); ActorNames::COUNT]:,
+        <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
+        M: 'static,
+{
+    fn clone(&self) -> Self {
+        Channel {
+            channel_fn: self.channel_fn,
+        }
+    }
 }
 
 impl<M, ActorNames> Channel<M, ActorNames>

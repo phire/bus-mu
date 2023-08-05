@@ -1,4 +1,6 @@
 
+use std::pin::Pin;
+
 use actor_framework::*;
 use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite, WriteFinished}};
 
@@ -28,11 +30,11 @@ impl Default for AiActor {
 }
 
 impl Actor<N64Actors> for AiActor {
-    fn get_message(&mut self) -> &mut MessagePacketProxy<N64Actors> {
-        self.outbox.as_mut()
+    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut MessagePacketProxy<N64Actors>> {
+        unsafe { self.map_unchecked_mut(|s| s.outbox.as_mut()) }
     }
 
-    fn message_delivered(&mut self, _time: Time) {
+    fn message_delivered(self: Pin<&mut Self>, _time: Time) {
         // do nothing
     }
 }

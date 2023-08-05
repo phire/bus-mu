@@ -1,7 +1,9 @@
 
+use std::pin::Pin;
+
 /// CpuActor: Emulates the CPU and MI (Mips Interface)
 
-use actor_framework::{Actor, Time, Handler, Outbox, OutboxSend, SchedulerResult};
+use actor_framework::{Actor, Time, Handler, Outbox, OutboxSend, SchedulerResult, MessagePacketProxy};
 use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor, pi_actor::{PiActor, self}, vi_actor::ViActor, ai_actor::AiActor, rdp_actor::RdpActor};
 
 use crate::{vr4300::{self}, actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::{RspActor, self}}};
@@ -53,11 +55,8 @@ fn to_bus_time(cpu_time: u64, odd: u64) -> u64 {
 
 impl Default for CpuActor {
     fn default() -> Self {
-        let mut outbox : CpuOutbox = Default::default();
-        outbox.send::<CpuActor>(CpuRun {}, Default::default());
-
-        CpuActor {
-            outbox,
+        let mut actor = CpuActor {
+            outbox: Default::default(),
             committed_time: Default::default(),
             _cpu_overrun: 0,
             cpu_core: Default::default(),
@@ -66,7 +65,10 @@ impl Default for CpuActor {
             outstanding_mem_request: None,
             bus_free: Default::default(),
             recursion: 0,
-        }
+        };
+        actor.outbox.send::<CpuActor>(CpuRun {}, Default::default());
+
+        actor
     }
 }
 
@@ -134,7 +136,7 @@ impl CpuActor {
             // and we can avoid the scheduler
             self.recursion += 1;
 
-            self.recv(BusAccept{}, request_time.add(1), limit);
+            Pin::new(self).recv(BusAccept{}, request_time.add(1), limit);
         } else {
             self.outbox.send::<BusActor>(BusRequest::new::<Self>(1), request_time);
         }
@@ -192,11 +194,11 @@ impl CpuActor {
 }
 
 impl Actor<N64Actors> for CpuActor {
-    fn get_message(&mut self) -> &mut actor_framework::MessagePacketProxy<N64Actors> {
-        self.outbox.as_mut()
+    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut MessagePacketProxy<N64Actors>> {
+        unsafe { self.map_unchecked_mut(|s| s.outbox.as_mut()) }
     }
 
-    fn message_delivered(&mut self, _time: Time) {
+    fn message_delivered(mut self: Pin<&mut Self>, _time: Time) {
         self.recursion = 0;
     }
 }
@@ -456,10 +458,12 @@ impl Handler<rsp_actor::TransferMemOwnership> for CpuActor {
 
 impl Handler<rsp_actor::ReqestMemOwnership> for CpuActor {
     fn recv(&mut self, _message: rsp_actor::ReqestMemOwnership, time: Time, _limit: Time) -> SchedulerResult {
-        self.outbox.send::<RspActor>(rsp_actor::TransferMemOwnership {
+        let msg = rsp_actor::TransferMemOwnership {
             imem: self.imem.take().unwrap(),
             dmem: self.imem.take().unwrap(),
-        }, time.add(4));
+        };
+
+        self.outbox.send::<RspActor>(msg, time.add(4));
 
         SchedulerResult::Ok
     }
