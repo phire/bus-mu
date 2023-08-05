@@ -222,9 +222,9 @@ impl Instruction {
     }
 }
 
-pub fn decode(inst: u32) -> (Instruction, &'static InstructionInfo) {
+pub fn decode(inst_word: u32) -> (Instruction, &'static InstructionInfo) {
     // we pre-decode to R-Type, as it's the only type decode logic uses
-    let inst = RType::from_bytes(inst.to_le_bytes());
+    let inst = RType::from_bytes(inst_word.to_le_bytes());
 
     let mut info = &PRIMARY_TABLE[inst.op() as usize];
     loop {
@@ -244,6 +244,9 @@ pub fn decode(inst: u32) -> (Instruction, &'static InstructionInfo) {
                     info = &COP0_FN_TABLE[inst.funct() as usize];
                 }
                 continue;
+            }
+            InstructionInfo::CopOp(n) => {
+                unimplemented!("COP{} not implemented - {:08x}", n, inst_word);
             }
             InstructionInfo::Op(_, _, form, _, _) => {
                 return (form.to_instruction(inst), info);
