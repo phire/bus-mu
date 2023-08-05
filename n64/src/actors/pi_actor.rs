@@ -39,7 +39,7 @@ impl Default for PiActor {
 
 impl PiActor {
     fn read_word(&self, address: u32) -> u32 {
-        let address = address as usize;
+        let address = (address / 2) as usize;
         if address >= self.rom.len() {
             panic!("Read out of bounds: {:#010x}", address);
         }
@@ -174,6 +174,8 @@ impl Handler<PiRead> for PiActor {
 
         let domain;
 
+        let data;
+
         match addr {
             0x0500_0000..=0x05ff_ffff => { // N64DD I/O registers (Domain 1)
                 unimplemented!("PI read {:#010x} (N64DD I/O registers)", addr);
@@ -186,7 +188,7 @@ impl Handler<PiRead> for PiActor {
             }
             0x1000_0000..=0x17ff_ffff => { // Cartridge ROM (Domain 1)
                 domain = &self.domains[0];
-                let data = self.read_word(addr - 0x1000_0000);
+                data = self.read_word(addr - 0x1000_0000);
                 println!("PI read {:#010x} (ROM) = {:#010x}", addr, data);
             }
             0x1fd0_0000..=0x7fff_ffff => { // Domain 1, but no known devices use this range
@@ -197,7 +199,7 @@ impl Handler<PiRead> for PiActor {
 
         let cycles = domain.calc_cycles(addr, 2);
 
-        self.outbox.send::<CpuActor>(ReadFinished::word(0), time.add(cycles));
+        self.outbox.send::<CpuActor>(ReadFinished::word(data), time.add(cycles));
 
         SchedulerResult::Ok
     }
