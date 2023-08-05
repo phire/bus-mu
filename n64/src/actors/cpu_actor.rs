@@ -15,6 +15,7 @@ pub struct CpuActor {
     dmem: Option<Box<[u32; 1024]>>,
     outstanding_mem_request: Option<vr4300::Reason>,
     bus_free: Time,
+    recursion: u32,
 }
 
 actor_framework::make_outbox!(
@@ -31,6 +32,8 @@ actor_framework::make_outbox!(
         write_finished: WriteFinished,
     }
 );
+
+const RECURSION_LIMIT: u32 = 100;
 
 struct CpuRun {}
 
@@ -62,6 +65,7 @@ impl Default for CpuActor {
             dmem: None,
             outstanding_mem_request: None,
             bus_free: Default::default(),
+            recursion: 0,
         }
     }
 }
@@ -113,7 +117,7 @@ impl CpuActor {
                 }
                 reason => {
                     // Request over C-BUS/D-BUS
-                    self.start_request(reason);
+                    self.start_request(reason, limit);
 
                     AdvanceResult::MemRequest
                 }
@@ -121,11 +125,19 @@ impl CpuActor {
         };
     }
 
-    fn start_request(&mut self, request: vr4300::Reason) {
+    fn start_request(&mut self, request: vr4300::Reason, limit: Time) {
         self.outstanding_mem_request = Some(request);
         let request_time = core::cmp::max(self.bus_free, self.committed_time);
 
-        self.outbox.send::<BusActor>(BusRequest::new::<Self>(1), request_time);
+        if self.recursion < RECURSION_LIMIT && request_time < limit {
+            // If nothing else needs to run before this request, we know we will win bus arbitration
+            // and we can avoid the scheduler
+            self.recursion += 1;
+
+            self.recv(BusAccept{}, request_time.add(1), limit);
+        } else {
+            self.outbox.send::<BusActor>(BusRequest::new::<Self>(1), request_time);
+        }
     }
 
     fn finish_mem(&mut self, mem_finished: MemFinished, time: Time, limit: Time) -> SchedulerResult {
@@ -157,7 +169,7 @@ impl CpuActor {
 
                 if let Some(new_req) = new_req {
                     assert!(self.outstanding_mem_request.is_none());
-                    self.start_request(new_req);
+                    self.start_request(new_req, limit);
                 }
             }
             MemFinished::Write(message) => {
@@ -165,11 +177,14 @@ impl CpuActor {
             }
         }
 
-        if limit > finish_time && self.outbox.contains::<CpuRun>() {
-            // The CPU core is ready to run (it didn't issue a new memory request)
-            // Might as well run it now to save scheduler overhead
-            let (_ , cpurun) = self.outbox.cancel();
-            self.advance(cpurun, limit);
+        if self.recursion < RECURSION_LIMIT && limit > finish_time {
+            if self.outbox.contains::<CpuRun>() {
+                // The CPU core is ready to run (it didn't issue a new memory request)
+                // Might as well run it now to save scheduler overhead
+                self.recursion += 1;
+                let (_ , cpurun) = self.outbox.cancel();
+                self.advance(cpurun, limit);
+            }
         }
 
         SchedulerResult::Ok
@@ -182,7 +197,7 @@ impl Actor<N64Actors> for CpuActor {
     }
 
     fn message_delivered(&mut self, _time: Time) {
-        // hmmm....
+        self.recursion = 0;
     }
 }
 
@@ -251,11 +266,11 @@ impl CpuActor {
             match reason {
                 vr4300::Reason::BusRead32(_, _) => {
                     let data = mem[offset];
-                    self.recv(ReadFinished::word(data), time, limit);
+                    self.finish_mem(MemFinished::Read(ReadFinished::word(data)), time, limit);
                 }
                 vr4300::Reason::BusWrite32(_, _, data) => {
                     mem[offset] = data;
-                    self.recv(WriteFinished::word(), time, limit);
+                    self.finish_mem(MemFinished::Write(WriteFinished::word()), time, limit);
                 }
                 _ => { panic!("unexpected bus operation") }
             }
