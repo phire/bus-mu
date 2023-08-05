@@ -10,7 +10,7 @@ pub struct SiActor {
     dram_address: u32,
     dma_active: bool,
     error: bool,
-    queued_message: Option<(SiPacket, Time)>,
+    queued_message: Option<(Time, SiPacket)>,
 }
 
 impl Default for SiActor {
@@ -42,8 +42,8 @@ impl Actor<N64Actors> for SiActor {
     }
 
     fn message_delivered(&mut self, time: Time) {
-        if let Some((message, msg_time)) = self.queued_message.take() {
-            println!("SiActor: sending queued message {:?} at time {}", message, u64::from(msg_time));
+        if let Some((msg_time, message)) = self.queued_message.take() {
+            println!("Si: sending queued message {:?} to time {} at {}", message, u64::from(msg_time), time);
             self.outbox.send::<PifActor>(message, msg_time);
         } else if self.dma_active {
             self.bus_request(time)
@@ -102,6 +102,10 @@ impl Handler<CpuRegRead> for SiActor {
                     }
                     _ => unreachable!()
                 };
+                if self.outbox.contains::<SiPacket>() {
+                    self.queued_message = Some(self.outbox.cancel());
+                }
+
                 self.outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
             }
             0x1fc0_0000..=0x1fc0_07ff => { // PIF ROM/RAM
@@ -133,6 +137,11 @@ impl Handler<CpuRegRead> for SiActor {
 
 impl Handler<CpuRegWrite> for SiActor {
     fn recv(&mut self, message: CpuRegWrite, time: Time, _: Time) -> SchedulerResult {
+        match self.state {
+            SiState::Idle => {}
+            _ => panic!("SI is busy")
+        }
+
         let address = message.address;
         let data = message.data;
         match address {
@@ -178,16 +187,11 @@ impl Handler<CpuRegWrite> for SiActor {
 
                 println!("SI: Write {:08x} = {:08x} at {}", address, data, time64);
 
-                match self.state {
-                    SiState::Idle => {}
-                    _ => panic!("SI is busy")
-                }
-
                 self.state = SiState::CpuWrite;
                 self.buffer[15] = data;
 
                 // Queue this message for after we finish telling the cpu it's write finished
-                self.queued_message = Some((SiPacket::Write4(pif_address), time64.into()));
+                self.queued_message = Some((time64.into(), SiPacket::Write4(pif_address)));
             }
             0x1fc0_0800..=0x1fcf_ffff => {
                 // Reserved SI range... not sure what should happen here

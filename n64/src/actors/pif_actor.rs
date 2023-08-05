@@ -104,6 +104,10 @@ enum PifState {
 
 impl Handler<SiPacket> for PifActor {
     fn recv(&mut self, message: SiPacket, time: Time, _limit: Time) -> SchedulerResult {
+        if self.outbox.contains::<PifHleMain>() {
+            let (_, _msg) : (_, PifHleMain) = self.outbox.cancel();
+        }
+
         match self.state {
             PifState::WaitCmd => {
 
@@ -138,7 +142,6 @@ impl Handler<SiPacket> for PifActor {
 
                 let (pif_core, mut io) = PifHleIoProxy::split(self);
                 pif_core.interrupt_a(&mut io, dir, size);
-
 
                 // HWTEST: UltraPIF inserts a 4 cycle delay here
                 //         But n64-systembench indicates it's more like 1800 cycles

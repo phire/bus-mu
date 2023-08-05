@@ -301,7 +301,7 @@ impl Pipeline {
 
         if let InstructionInfo::Op(_, _, _, rf_mode, ex_mode) = *inst_info {
             rf.ex_mode = ex_mode;
-            println!("RF: {:?}", rf_mode);
+            //println!("RF: {:?}", rf_mode);
             match rf_mode {
                 // PERF: This could be simplified down to just a few flags
                 //       But would that be faster than the jump table this compiles to?
@@ -409,7 +409,7 @@ impl Pipeline {
         ex.mem_size = 0;
         ex.writeback_reg = rf.writeback_reg;
 
-        println!("EX: {:?}", rf.ex_mode);
+        //println!("EX: {:?}", rf.ex_mode);
 
         match rf.ex_mode {
             ExMode::Nop => {

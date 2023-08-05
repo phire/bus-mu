@@ -18,7 +18,8 @@ impl<A, ActorNames> Addr<A, ActorNames>
 
 pub struct Channel<M, ActorNames>
     where ActorNames: MakeNamed,
-        [(); ActorNames::COUNT]:
+        [(); ActorNames::COUNT]:,
+        M: 'static,
 {
     channel_fn: fn (time: Time, message: M) -> MessagePacket<ActorNames, M>,
     //actor_name: ActorNames,

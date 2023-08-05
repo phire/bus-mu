@@ -70,11 +70,11 @@ enum AdvanceResult {
 }
 
 impl CpuActor {
-    fn advance(&mut self, limit: Time) -> AdvanceResult {
+    fn advance(&mut self, _: CpuRun, limit: Time) -> AdvanceResult {
         let limit_64: u64 = limit.into();
         let mut commit_time_64: u64 = self.committed_time.into();
 
-        println!("CpuActor::advance({}, {})", limit_64, commit_time_64);
+        //println!("CpuActor::advance({}, {})", limit_64, commit_time_64);
 
         let cycles: u64 = limit_64 - commit_time_64;
 
@@ -88,7 +88,7 @@ impl CpuActor {
             let used_cycles = to_bus_time(result.cycles, odd);
             commit_time_64 += used_cycles;
             self.committed_time = commit_time_64.into();
-            println!("core did {} ({}) cycles and returned {} at cycle {}", used_cycles, result.cycles, result.reason, commit_time_64);
+            //println!("core did {} ({}) cycles and returned {} at cycle {}", used_cycles, result.cycles, result.reason, commit_time_64);
             assert!(used_cycles <= cycles, "{} > {} | {}, {}", used_cycles, cycles, cpu_cycles, result.cycles);
 
             return match result.reason {
@@ -128,7 +128,7 @@ impl CpuActor {
 
     fn finish_mem(&mut self, mem_finished: MemFinished, time: Time, limit: Time) -> SchedulerResult {
         let request = self.outstanding_mem_request.take().unwrap();
-        println!("CPU: Finishing {:} at {:}", request, time);
+        //println!("CPU: Finishing {:} at {:}", request, time);
 
         assert!((u64::from(time) - u64::from(self.committed_time)) >= 1, "mem finished too fast");
 
@@ -145,7 +145,7 @@ impl CpuActor {
         self.bus_free = finish_time;
 
         // Advance the CPU upto the finish time
-        self.advance(finish_time);
+        self.advance(CpuRun {  }, finish_time);
 
         let req_type = request.request_type();
 
@@ -163,22 +163,14 @@ impl CpuActor {
             }
         }
 
-        return match &self.outstanding_mem_request {
-            Some(new_request) => {
-                println!("CPU: Finished {:}, but CPU issued new request {:}", request, new_request);
-                // The CPU core issued another memory request... let the scheduler handle it
-                SchedulerResult::Ok
-            }
-            None => {
-                println!("CPU: Finished {:}", request);
-                // Otherwise, run the CPU now; Avoid scheduler overhead
-                if (limit > finish_time) {
-                    self.advance(limit);
-                }
-
-                SchedulerResult::Ok
-            }
+        if limit > finish_time && self.outbox.contains::<CpuRun>() {
+            // The CPU core is ready to run (it didn't issue a new memory request)
+            // Might as well run it now to save scheduler overhead
+            let (_ , cpurun) = self.outbox.cancel();
+            self.advance(cpurun, limit);
         }
+
+        SchedulerResult::Ok
     }
 }
 
@@ -191,7 +183,6 @@ impl Actor<N64Actors> for CpuActor {
         // hmmm....
     }
 }
-
 
 impl Handler<ReadFinished> for CpuActor {
     fn recv(&mut self, message: ReadFinished, time: Time, limit: Time) -> SchedulerResult {
@@ -206,16 +197,16 @@ impl Handler<WriteFinished> for CpuActor {
 }
 
 impl Handler<CpuRun> for CpuActor {
-    fn recv(&mut self, _: CpuRun, time: Time, limit: Time) -> SchedulerResult {
+    fn recv(&mut self, msg: CpuRun, time: Time, limit: Time) -> SchedulerResult {
         debug_assert!(time == self.committed_time);
         if time == limit {
-            self.outbox.send::<CpuActor>(CpuRun {}, time);
+            self.outbox.send::<CpuActor>(msg, time);
 
             // Let the scheduler know we are zero limited
             return SchedulerResult::ZeroLimit;
         }
 
-        self.advance(limit);
+        self.advance(msg, limit);
 
         SchedulerResult::Ok
     }
@@ -285,11 +276,11 @@ impl Handler<BusAccept> for CpuActor {
             }
             0x0400_0000 => match address & 0x040c_0000 { // RSP
                 0x0400_0000 if address & 0x1000 == 0 => { // DMEM Direct access
-                    println!("DMEM access {}", reason);
+                    //println!("DMEM access {}", reason);
                     self.do_rspmem(reason, time);
                 }
                 0x0400_0000 if address & 0x1000 != 0 => { // IMEM Direct access
-                    println!("IMEM access {}", reason);
+                    //println!("IMEM access {}", reason);
                     self.do_rspmem(reason, time);
                 }
                 0x0404_0000 | 0x0408_0000 => { // RSP Register

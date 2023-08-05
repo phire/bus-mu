@@ -1,6 +1,6 @@
 
 
-use std::mem::{MaybeUninit, ManuallyDrop};
+use std::{mem::{MaybeUninit, ManuallyDrop}, any::TypeId};
 
 use crate::{object_map::ObjectStore, MakeNamed, Time, Handler, Actor, Addr, Channel, SchedulerResult};
 
@@ -16,6 +16,7 @@ where
 
     pub time: Time,
     pub(crate) execute_fn: Option<ExecuteFn<ActorNames>>,
+    msg_type: TypeId,
 }
 
 #[repr(C)]
@@ -23,15 +24,18 @@ pub struct MessagePacket<ActorNames, Message>
 where
     ActorNames: MakeNamed,
     [(); ActorNames::COUNT]: ,
+    Message: 'static,
 {
     pub time: Time,
     pub(crate) execute_fn: Option<ExecuteFn<ActorNames>>,
+    msg_type: std::any::TypeId,
     //actor_name: ActorNames,
     data: MaybeUninit<ManuallyDrop<Message>>,
 }
 
 fn direct_execute<ActorNames, Sender, Receiver, Message>(_: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
 where
+    Message: 'static,
     Receiver: Handler<Message> + Actor<ActorNames>,
     Sender: crate::Actor<ActorNames>,
     ActorNames: MakeNamed,
@@ -55,6 +59,7 @@ where
 
 fn channel_execute<ActorNames, Receiver, Message>(sender_id: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
 where
+    Message: 'static,
     Receiver: Handler<Message> + Actor<ActorNames>,
     ActorNames: MakeNamed,
     <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
@@ -82,6 +87,9 @@ where
     pub fn is_some(&self) -> bool {
         self.execute_fn.is_some()
     }
+    pub fn msg_type(&self) -> TypeId {
+        self.msg_type
+    }
 }
 
 impl<ActorNames, Message> MessagePacket<ActorNames, Message>
@@ -92,23 +100,23 @@ where
     pub fn is_some(&self) -> bool {
         self.execute_fn.is_some()
     }
-}
 
-impl<ActorNames, Message> MessagePacket<ActorNames, Message>
-where
-    ActorNames: MakeNamed,
-    [(); ActorNames::COUNT]: ,
-{
+    pub fn msg_type(&self) -> TypeId {
+        self.msg_type
+    }
+
     pub fn new<Sender, Receiver>(time: Time, data: Message) -> Self
     where
         Receiver: Handler<Message> + Actor<ActorNames>,
         Sender: crate::Actor<ActorNames>,
+        Message: 'static,
     {
         Self {
             time,
             // Safety: It is essential that we instantiate the correct execute_fn
             //         template here. It relies on this function for type checking
             execute_fn: Some(direct_execute::<ActorNames, Sender, Receiver, Message>),
+            msg_type: TypeId::of::<Message>(),
             data: MaybeUninit::new(ManuallyDrop::new(data)),
         }
     }
@@ -117,24 +125,46 @@ where
     where
         Receiver: Handler<Message> + Actor<ActorNames>,
         <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
+        Message: 'static,
     {
         Self {
             time,
             // Safety: It is essential that we instantiate the correct execute_fn
             //         template here. It relies on this function for type checking
             execute_fn: Some(channel_execute::<ActorNames, Receiver, Message>),
+            msg_type: TypeId::of::<Message>(),
             data: MaybeUninit::new(ManuallyDrop::new(data)),
         }
     }
 
-    unsafe fn take(&mut self) -> (Time, Message) {
-        let mut packet = Self {
-            time: Time::MAX,
-            execute_fn: None,
-            data: MaybeUninit::uninit(),
-        };
-        std::mem::swap(self, &mut packet);
-        (packet.time, ManuallyDrop::into_inner(packet.data.assume_init()) )
+    pub unsafe fn take(&mut self) -> (Time, Message) {
+        //debug_assert!(self.execute_fn.is_some());
+        debug_assert!(self.msg_type == TypeId::of::<Message>());
+
+        self.msg_type = TypeId::of::<()>();
+        self.execute_fn = None;
+
+        let mut time = Time::MAX;
+        std::mem::swap(&mut self.time, &mut time);
+        let mut data = MaybeUninit::uninit();
+        std::mem::swap(&mut self.data, &mut data);
+
+        (time, ManuallyDrop::into_inner(data.assume_init()))
+    }
+}
+
+impl<ActorNames, Message> Drop for MessagePacket<ActorNames, Message>
+where
+    Message: 'static,
+    ActorNames: MakeNamed,
+    [(); ActorNames::COUNT]: ,
+{
+    fn drop(&mut self) {
+        assert!(self.msg_type == TypeId::of::<Message>());
+
+        unsafe {
+            self.take();
+        }
     }
 }
 
@@ -147,6 +177,7 @@ where
         Self {
             time: Time::MAX,
             execute_fn: None,
+            msg_type: TypeId::of::<()>(),
             data: MaybeUninit::new(ManuallyDrop::new(())),
         }
     }
@@ -174,6 +205,7 @@ where
     where
         Receiver: Handler<Message> + Actor<ActorNames>;
     fn send_channel(&mut self, channel: &Channel<Message, ActorNames>, message: Message, time: Time);
+    fn cancel(&mut self) -> (Time, Message);
 }
 
 #[macro_export]
@@ -197,6 +229,41 @@ macro_rules! make_outbox {
         impl $name {
             fn is_empty(&self) -> bool {
                 unsafe { !self.none.is_some() }
+            }
+            fn msg_type(&self) -> std::any::TypeId {
+                unsafe { self.none.msg_type() }
+            }
+            fn msg_type_name(&self) -> &'static str {
+                let msg_type = self.msg_type();
+
+                if msg_type == std::any::TypeId::of::<()>() {
+                    "Empty"
+                }
+                $(else if msg_type == std::any::TypeId::of::<$t>() {
+                    std::any::type_name::<$t>()
+                })+
+                else {
+                    unreachable!()
+                }
+            }
+            fn contains<Msg>(&self) -> bool
+            where
+                Msg: 'static,
+            {
+                self.msg_type() == std::any::TypeId::of::<Msg>()
+            }
+        }
+
+        impl core::ops::Drop for $name {
+            fn drop(&mut self) {
+                let msg_type = self.msg_type();
+
+                if msg_type == std::any::TypeId::of::<()>() {
+                    unsafe { core::mem::ManuallyDrop::drop( &mut self.none) };
+                }
+                $(else if msg_type == std::any::TypeId::of::<$t>() {
+                    unsafe { core::mem::ManuallyDrop::drop( &mut self.$i) };
+                })+
             }
         }
 
@@ -235,7 +302,11 @@ macro_rules! make_outbox {
         // match exactly one field of `name: MessageType`
         $field_ident:ident : $field_type:ty
     ) => {
-        impl actor_framework::OutboxSend<$name_type, $field_type> for $name {
+        impl actor_framework::OutboxSend<$name_type, $field_type> for $name
+        where
+            $name_type: actor_framework::MakeNamed,
+            [(); <$name_type as actor_framework::MakeNamed>::COUNT]: ,
+        {
             fn send<Receiver>(&mut self, message: $field_type, time: Time)
             where
                 Receiver: actor_framework::Handler<$field_type> + actor_framework::Actor<$name_type>,
@@ -246,17 +317,31 @@ macro_rules! make_outbox {
                     <Self as actor_framework::Outbox<$name_type>>::Sender,
                     Receiver>(time, message));
             }
+
             fn send_addr<Receiver>(&mut self, addr: &actor_framework::Addr<Receiver, $name_type>, message: $field_type, time: Time)
             where
                 Receiver: actor_framework::Handler<$field_type> + actor_framework::Actor<$name_type>,
             {
                 self.send::<Receiver>(message, time);
             }
+
             fn send_channel(&mut self, channel: &actor_framework::Channel<$field_type, $name_type>, message: $field_type, time: Time)
             {
                 self.$field_ident = core::mem::ManuallyDrop::new(channel.send(message, time));
             }
 
+            fn cancel(&mut self) -> (Time, $field_type)
+            {
+                let msg_type = unsafe { self.none.msg_type() };
+                if msg_type == std::any::TypeId::of::<$field_type>() {
+                    unsafe {
+                        return self.$field_ident.take();
+                    }
+                } else {
+                    let typename = std::any::type_name::<$field_type>();
+                    panic!("Outbox::cancel - Expected {} but found {:?}", typename, msg_type);
+                }
+            }
         }
     };
     // Call above rule for every field

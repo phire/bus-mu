@@ -77,11 +77,11 @@ impl Core {
                     Reason::BusRead128(RequestType::DCacheFill, new_addr)
                 }
                 ExitReason::Mem(MemoryReq::UncachedInstructionRead(addr)) => {
-                    println!("Uncached instruction read: {:08x}", addr);
+                    //println!("Uncached instruction read: {:08x}", addr);
                     Reason::BusRead32(RequestType::UncachedInstructionRead, addr)
                 }
                 ExitReason::Mem(MemoryReq::UncachedDataRead(addr, size)) => {
-                    println!("Uncached data read: {:08x} ({} bytes)", addr, size);
+                    //println!("Uncached data read: {:08x} ({} bytes)", addr, size);
                     match size {
                         1 | 2 | 4 => Reason::BusRead32(RequestType::UncachedDataRead, addr),
                         8 => Reason::BusRead64(RequestType::UncachedDataRead, addr),
