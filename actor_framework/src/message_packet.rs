@@ -15,7 +15,7 @@ where
 {
 
     pub time: Time,
-    pub(crate) execute_fn: Option<ExecuteFn<ActorNames>>,
+    pub(crate) execute_fn: ExecuteFn<ActorNames>,
     msg_type: TypeId,
 }
 
@@ -23,11 +23,12 @@ where
 pub struct MessagePacket<ActorNames, Message>
 where
     ActorNames: MakeNamed,
+    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
     [(); ActorNames::COUNT]: ,
     Message: 'static,
 {
     pub time: Time,
-    pub(crate) execute_fn: Option<ExecuteFn<ActorNames>>,
+    pub(crate) execute_fn: ExecuteFn<ActorNames>,
     msg_type: std::any::TypeId,
     //actor_name: ActorNames,
     data: MaybeUninit<ManuallyDrop<Message>>,
@@ -39,6 +40,7 @@ where
     Receiver: Handler<Message> + Actor<ActorNames>,
     Sender: crate::Actor<ActorNames>,
     ActorNames: MakeNamed,
+    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
     [(); ActorNames::COUNT]: ,
 {
     let proxy = map.get::<Sender>().get_message();
@@ -79,13 +81,23 @@ where
     result
 }
 
+fn null_execute<ActorNames>(_: ActorNames, _: &mut ObjectStore<ActorNames>, _: Time) -> SchedulerResult
+where
+    ActorNames: MakeNamed,
+    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
+    [(); ActorNames::COUNT]: ,
+{
+    panic!("Scheduler tried to execute an empty message");
+}
+
 impl<ActorNames> MessagePacketProxy<ActorNames>
 where
     ActorNames: MakeNamed,
+    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
     [(); ActorNames::COUNT]: ,
 {
     pub fn is_some(&self) -> bool {
-        self.execute_fn.is_some()
+        self.execute_fn != null_execute::<ActorNames>
     }
     pub fn msg_type(&self) -> TypeId {
         self.msg_type
@@ -95,10 +107,11 @@ where
 impl<ActorNames, Message> MessagePacket<ActorNames, Message>
 where
     ActorNames: MakeNamed,
+    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
     [(); ActorNames::COUNT]: ,
 {
     pub fn is_some(&self) -> bool {
-        self.execute_fn.is_some()
+        self.execute_fn != null_execute::<ActorNames>
     }
 
     pub fn msg_type(&self) -> TypeId {
@@ -115,7 +128,7 @@ where
             time,
             // Safety: It is essential that we instantiate the correct execute_fn
             //         template here. It relies on this function for type checking
-            execute_fn: Some(direct_execute::<ActorNames, Sender, Receiver, Message>),
+            execute_fn: direct_execute::<ActorNames, Sender, Receiver, Message>,
             msg_type: TypeId::of::<Message>(),
             data: MaybeUninit::new(ManuallyDrop::new(data)),
         }
@@ -131,7 +144,7 @@ where
             time,
             // Safety: It is essential that we instantiate the correct execute_fn
             //         template here. It relies on this function for type checking
-            execute_fn: Some(channel_execute::<ActorNames, Receiver, Message>),
+            execute_fn: channel_execute::<ActorNames, Receiver, Message>,
             msg_type: TypeId::of::<Message>(),
             data: MaybeUninit::new(ManuallyDrop::new(data)),
         }
@@ -142,7 +155,7 @@ where
         debug_assert!(self.msg_type == TypeId::of::<Message>());
 
         self.msg_type = TypeId::of::<()>();
-        self.execute_fn = None;
+        self.execute_fn = null_execute::<ActorNames>;
 
         let mut time = Time::MAX;
         std::mem::swap(&mut self.time, &mut time);
@@ -157,6 +170,7 @@ impl<ActorNames, Message> Drop for MessagePacket<ActorNames, Message>
 where
     Message: 'static,
     ActorNames: MakeNamed,
+    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
     [(); ActorNames::COUNT]: ,
 {
     fn drop(&mut self) {
@@ -171,12 +185,13 @@ where
 impl<ActorNames> Default for MessagePacket<ActorNames, ()>
 where
     ActorNames: MakeNamed,
+    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
     [(); ActorNames::COUNT]: ,
 {
     fn default() -> Self {
         Self {
             time: Time::MAX,
-            execute_fn: None,
+            execute_fn: null_execute::<ActorNames>,
             msg_type: TypeId::of::<()>(),
             data: MaybeUninit::new(ManuallyDrop::new(())),
         }
@@ -196,6 +211,7 @@ where
 pub trait OutboxSend<ActorNames, Message>
 where
     ActorNames: MakeNamed,
+    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
     [(); ActorNames::COUNT]: ,
 {
     fn send<Receiver>(&mut self, message: Message, time: Time)

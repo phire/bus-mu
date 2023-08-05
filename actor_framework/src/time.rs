@@ -18,12 +18,14 @@ impl Time {
         self.cycles != u64::MAX && self.cycles != 0
     }
 
+    #[inline(always)]
     pub fn add(self, other: u64) -> Self {
         Time {
             cycles: self.cycles + other
         }
     }
 
+    #[inline(always)]
     pub fn lower_bound(&self) -> Self {
         // TODO: once we have lazy times, this will be the minimum of the lazy time
         Time {
@@ -44,6 +46,7 @@ impl Time {
 }
 
 impl Default for Time {
+    #[inline(always)]
     fn default() -> Self {
         Time {
             cycles: 0,
@@ -52,12 +55,14 @@ impl Default for Time {
 }
 
 impl From<Time> for u64 {
+    #[inline(always)]
     fn from(value: Time) -> Self {
         value.cycles
     }
 }
 
 impl From<u64> for Time {
+    #[inline(always)]
     fn from(cycles: u64) -> Self {
         Time {
             cycles

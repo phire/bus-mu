@@ -30,8 +30,9 @@ ActorNames: MakeNamed,
     [(); ActorNames::COUNT]:,
  {
     pub fn new() -> Scheduler<ActorNames> {
+        let actors = ObjectStore::new();
         Scheduler {
-            actors: ObjectStore::new(),
+            actors,
             count: 0,
             zero_limit_count: 0,
         }
@@ -66,13 +67,11 @@ ActorNames: MakeNamed,
         let message = &mut self.actors.get_id(sender_id).get_message();
 
         //println!("Running actor {:?} at time {:?}", sender_id, message.time);
-        let execute_fn = message.execute_fn.expect("Execute fn missing");
 
-        let result = (execute_fn)(sender_id, &mut self.actors, limit);
-
-        result.into()
+        (message.execute_fn)(sender_id, &mut self.actors, limit)
     }
 
+    #[inline(never)]
     pub fn run(&mut self) -> Box<dyn std::error::Error> {
         loop {
             let (sender_id, time, limit) = self.find_next();
@@ -83,15 +82,13 @@ ActorNames: MakeNamed,
                     continue;
                 },
                 SchedulerResult::ZeroLimit => {
-                    assert!(time == limit, "Actor incorrectly reported a zero limit");
-
                     // There are multiple messages scheduled to be delivered on the same cycle.
                     // And one of the receivers couldn't deal with the zero limit message, so we switch
                     // to a more complex scheduler until the current cycle finishes.
-                    let result = self.run_zero_limit(time);
-                    if let Some(exit_reason) = result {
+                    if let Some(exit_reason) = self.run_zero_limit(time, limit) {
                         return exit_reason;
                     }
+                    continue;
                 },
                 SchedulerResult::Exit(reason) => {
                     return reason;
@@ -100,7 +97,10 @@ ActorNames: MakeNamed,
         }
     }
 
-    pub fn run_zero_limit(&mut self, time: Time) -> Option<Box<dyn std::error::Error>> {
+    #[inline(never)]
+    pub fn run_zero_limit(&mut self, time: Time, limit: Time) -> Option<Box<dyn std::error::Error>> {
+        assert!(time == limit, "Actor incorrectly reported a zero limit");
+
         // We might need to go though multiple iterations before this settles
         for _ in 0..(ActorNames::COUNT * 3) {
             self.zero_limit_count += 1;

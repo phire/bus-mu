@@ -19,18 +19,20 @@ impl<A, ActorNames> Addr<A, ActorNames>
 pub struct Channel<M, ActorNames>
     where ActorNames: MakeNamed,
         [(); ActorNames::COUNT]:,
+        <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
         M: 'static,
 {
     channel_fn: fn (time: Time, message: M) -> MessagePacket<ActorNames, M>,
     //actor_name: ActorNames,
 }
 
-impl<M, Name> Channel<M, Name>
+impl<M, ActorNames> Channel<M, ActorNames>
     where M: 'static,// + core::fmt::Debug,
-    Name: MakeNamed,
-    [(); Name::COUNT] :
+    ActorNames: MakeNamed,
+    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
+    [(); ActorNames::COUNT] :
 {
-    pub fn send(&self, message: M, time: Time) -> MessagePacket<Name, M> {
+    pub fn send(&self, message: M, time: Time) -> MessagePacket<ActorNames, M> {
         (self.channel_fn)(time, message)
     }
 }

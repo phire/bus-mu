@@ -57,8 +57,8 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
 
         classes.push(quote! {
             impl actor_framework::Named<#ident> for #class_path {
-                fn name() -> #ident { #ident::#name }
-                fn dyn_name(&self) -> #ident { #ident::#name }
+                #[inline(always)] fn name() -> #ident { #ident::#name }
+                #[inline(always)] fn dyn_name(&self) -> #ident { #ident::#name }
             }
         });
     }
@@ -84,12 +84,14 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
         }
 
         impl From<#ident> for usize {
+            #[inline(always)]
             fn from(id: #ident) -> usize {
                 id as usize
             }
         }
 
         impl From<usize> for #ident {
+            #[inline(always)]
             fn from(id: usize) -> #ident {
                 match id {
                     #(#from_patterns)*
