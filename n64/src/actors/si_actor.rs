@@ -279,7 +279,7 @@ impl Handler<SiPacket> for SiActor {
                 self.dma_active = true;
             }
             SiPacket::Finish => {
-                if let Some(pif_addr) = self.queued_read {
+                if let Some(pif_addr) = self.queued_read.take() {
                     self.pif_read(pif_addr, time);
                 } else {
                     self.state = SiState::Idle;
