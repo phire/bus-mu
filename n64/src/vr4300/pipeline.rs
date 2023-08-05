@@ -357,7 +357,7 @@ impl Pipeline {
                 }
                 RfMode::StoreOp => {
                     rf.alu_a = regfile.read(i.rs());
-                    rf.alu_b = i.imm() as u64;
+                    rf.alu_b = i.imm() as i16 as u64;
                     rf.writeback_reg = 0;
                     rf.temp = regfile.read(i.rt());
                     rf.store = true;
