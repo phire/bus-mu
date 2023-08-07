@@ -1,5 +1,5 @@
 
-use crate::{object_map::ObjectStore, Time, MakeNamed, actor_box::AsBase};
+use crate::{object_map::{ObjectStore, ObjectStoreView}, Time, MakeNamed, actor_box::AsBase, Actor, MessagePacket, OutboxSend, Handler};
 
 pub struct Scheduler<ActorNames> where
     ActorNames: MakeNamed,
@@ -61,8 +61,6 @@ ActorNames: MakeNamed,
         self.count += 1;
 
         let execute_fn = self.actors.get_base(sender_id).outbox.execute_fn;
-
-        //println!("Running actor {:?} at time {:?}", sender_id, message.time);
         (execute_fn)(sender_id, &mut self.actors, limit)
     }
 
@@ -128,4 +126,78 @@ pub enum SchedulerResult
     Ok,
     ZeroLimit,
     Exit(Box<dyn std::error::Error>)
+}
+
+pub(super) type ExecuteFn<ActorNames> = for<'a> fn(sender_id: ActorNames, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult;
+
+pub(super) fn direct_execute<'a, ActorNames, Sender, Receiver, Message>(_: ActorNames, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
+where
+    ActorNames: MakeNamed,
+    Message: 'static,
+    Receiver: Actor<ActorNames> + Handler<ActorNames, Message>,
+    Sender: Actor<ActorNames>,
+    <Sender as Actor<ActorNames>>::OutboxType: OutboxSend<ActorNames, Message>,
+{
+    let actor = map.get::<Sender>();
+    let packet = actor.outbox.as_packet();
+    let (time, message) = {
+
+        // Safety: Type checked in MessagePacket::new
+         unsafe { packet.unwrap_unchecked().take() }
+    };
+
+    let receiver = map.get::<Receiver>();
+    let result = receiver.actor.recv(&mut receiver.outbox, message, time, limit);
+
+    let actor = map.get::<Sender>();
+    actor.actor.message_delivered(&mut actor.outbox, time);
+
+    result
+}
+
+pub(super) fn endpoint_execute<'a, ActorNames, Sender, Message>(_: ActorNames, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
+where
+    ActorNames: MakeNamed,
+    Message: 'static,
+    Sender: Actor<ActorNames>,
+    <Sender as Actor<ActorNames>>::OutboxType: OutboxSend<ActorNames, Message>,
+{
+    let mut packet_view = map.get_view::<Sender>().map(
+        |actor_box| {
+            let packet = actor_box.outbox.as_packet();
+            // Safety: Type checked in MessagePacket::from_endpoint
+            unsafe { packet.unwrap_unchecked() }
+        }
+    );
+    let (endpoint_fn, time) =
+        packet_view.run(|p| (p.endpoint_fn.clone(), p.time.clone()));
+
+    // Safety: Type checked in MessagePacket::from_endpoint
+    let endpoint_fn = unsafe { endpoint_fn.assume_init() };
+
+    let result = (endpoint_fn)(packet_view, limit);
+
+    let actor = map.get::<Sender>();
+    actor.actor.message_delivered(&mut actor.outbox, time);
+
+    result
+}
+
+pub(super) type EndpointFn<ActorNames, Message> = for<'a> fn(
+    packet_view: ObjectStoreView<'a, ActorNames, MessagePacket<ActorNames, Message>>,
+    limit: Time
+) -> SchedulerResult;
+
+pub(super) fn receive_for_endpoint<ActorNames, Receiver, Message>(
+    mut packet_view: ObjectStoreView<'_, ActorNames, MessagePacket<ActorNames, Message>>,
+    limit: Time
+) -> SchedulerResult
+where
+    ActorNames: MakeNamed,
+    Receiver: Handler<ActorNames, Message> + Actor<ActorNames>,
+{
+    let (time, message) = packet_view.run(|p| unsafe { p.take() });
+
+    let receiver = packet_view.get_obj::<Receiver>();
+    receiver.actor.recv(&mut receiver.outbox, message, time, limit)
 }

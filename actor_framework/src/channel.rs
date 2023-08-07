@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::{message_packet::ExecuteFn, MakeNamed, Actor, Handler};
+use crate::{MakeNamed, Actor, Handler};
 
 /// Allows registering a channel between a Sender and Receiver for a given Message type.
 ///
@@ -12,7 +12,7 @@ pub struct Channel<ActorNames, Sender, Message>
         ActorNames: MakeNamed,
         Sender: Actor<ActorNames>,
 {
-    pub(super) execute_fn: ExecuteFn<ActorNames>,
+    pub(super) execute_fn: crate::scheduler::ExecuteFn<ActorNames>,
     message_type: PhantomData<Message>,
     sender: PhantomData<Sender>,
 }
@@ -31,7 +31,7 @@ where
         Channel {
             // Safety: It is essential that we instantiate the correct execute_fn
             //         template here. It relies on this function for type checking
-            execute_fn: crate::message_packet::direct_execute::<ActorNames, Sender, Receiver, Message>,
+            execute_fn: crate::scheduler::direct_execute::<ActorNames, Sender, Receiver, Message>,
             message_type: PhantomData,
             sender: PhantomData,
         }

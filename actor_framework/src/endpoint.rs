@@ -1,4 +1,4 @@
-use crate::{MakeNamed, Handler, Addr, Actor, message_packet::EndpointFn};
+use crate::{MakeNamed, Handler, Addr, Actor};
 
 /// An Endpoint is half of a `Channel`.
 /// The Receiver and Message type is known at compile time but the Sender is dynamically dispatched.
@@ -14,7 +14,7 @@ pub struct Endpoint<ActorNames, Message>
         ActorNames: MakeNamed,
         Message: 'static
 {
-    pub(super) endpoint_fn: EndpointFn<ActorNames, Message>,
+    pub(super) endpoint_fn: crate::scheduler::EndpointFn<ActorNames, Message>,
 }
 
 impl<ActorNames, Message> Endpoint<ActorNames, Message>
@@ -26,7 +26,7 @@ where
         Receiver : Handler<ActorNames, Message> + Actor<ActorNames>,
     {
         Endpoint {
-            endpoint_fn: crate::message_packet::receive_for_endpoint::<ActorNames, Receiver, Message>,
+            endpoint_fn: crate::scheduler::receive_for_endpoint::<ActorNames, Receiver, Message>,
         }
     }
 }
@@ -51,7 +51,7 @@ impl<A, ActorNames> Addr<A, ActorNames>
         A : Handler<ActorNames, Message> + Actor<ActorNames>,
     {
         Endpoint {
-            endpoint_fn: crate::message_packet::receive_for_endpoint::<ActorNames, A, Message>,
+            endpoint_fn: crate::scheduler::receive_for_endpoint::<ActorNames, A, Message>,
         }
     }
 }

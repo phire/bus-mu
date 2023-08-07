@@ -90,12 +90,6 @@ macro_rules! make_outbox {
             ActorNames: actor_framework::MakeNamed,
         {
             type Sender = $sender;
-            // fn as_mut(&mut self) -> &mut actor_framework::MessagePacketProxy<ActorNames> {
-            //     unsafe { std::mem::transmute(self) }
-            // }
-            // fn as_ref(&self) -> &actor_framework::MessagePacketProxy<ActorNames> {
-            //     unsafe { std::mem::transmute(self) }
-            // }
         }
 
         impl core::default::Default for $name {
@@ -122,8 +116,8 @@ macro_rules! make_outbox {
         impl actor_framework::OutboxSend<$name_type, $field_type> for $name
         where
             $name_type: actor_framework::MakeNamed,
-            //[(); <$name_type as actor_framework::MakeNamed>::COUNT]: ,
         {
+            #[inline(always)]
             fn send<Receiver>(&mut self, message: $field_type, time: Time)
             where
                 Receiver: Handler<$name_type, $field_type> + Actor<$name_type>
@@ -134,6 +128,8 @@ macro_rules! make_outbox {
                     <Self as actor_framework::Outbox<$name_type>>::Sender,
                     Receiver>(time, message));
             }
+
+            #[inline(always)]
             fn send_channel<Sender>(&mut self, channel: actor_framework::Channel<$name_type, Sender, $field_type>, message: $field_type, time: Time)
             where
                 Sender: Actor<$name_type>,
@@ -145,13 +141,7 @@ macro_rules! make_outbox {
                     actor_framework::MessagePacket::from_channel(channel, message, time));
             }
 
-            // fn send_addr<Receiver>(&mut self, addr: &actor_framework::Addr<Receiver, $name_type>, message: $field_type, time: Time)
-            // where
-            //     Receiver: actor_framework::Handler<$name_type, $field_type> + actor_framework::Actor<$name_type>,
-            // {
-            //     self.send::<Receiver>(message, time);
-            // }
-
+            #[inline(always)]
             fn send_endpoint(&mut self, endpoint: actor_framework::Endpoint<$name_type, $field_type>, message: $field_type, time: Time)
             {
                 assert!(self.is_empty());
@@ -162,6 +152,7 @@ macro_rules! make_outbox {
                     (endpoint, time, message));
             }
 
+            #[inline(always)]
             fn cancel(&mut self) -> (Time, $field_type)
             {
                 let msg_type = unsafe { self.none.msg_type() };
@@ -174,6 +165,8 @@ macro_rules! make_outbox {
                     panic!("Outbox::cancel - Expected {} but found {:?}", typename, msg_type);
                 }
             }
+
+            #[inline(always)]
             fn as_packet<'a>(&'a mut self) -> Option<&'a mut actor_framework::MessagePacket<$name_type, $field_type>> {
                 let msg_type = unsafe { self.none.msg_type() };
                 if msg_type == std::any::TypeId::of::<$field_type>() {
