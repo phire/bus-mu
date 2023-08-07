@@ -1,4 +1,4 @@
-use std::{collections::BinaryHeap, pin::Pin};
+use std::collections::BinaryHeap;
 
 use actor_framework::*;
 use super::N64Actors;
@@ -29,7 +29,7 @@ make_outbox!(
 pub struct BusAccept {}
 
 pub struct BusRequest {
-    channel: Channel<BusAccept, N64Actors>,
+    channel: Channel<N64Actors, BusAccept>,
     piority: u16,
     count: u16,
 }
@@ -52,7 +52,7 @@ impl BusRequest {
     /// Limitations: There can only be one outstanding bus request per actor
     pub fn new<A>(count: u16) -> Self
     where
-        A: for<'a, 'b> actor_framework::Receiver<'a, 'b, N64Actors, BusAccept>,
+        A: Handler<N64Actors, BusAccept> + Actor<N64Actors>
     {
         let addr = Addr::<A, N64Actors>::default();
         Self {

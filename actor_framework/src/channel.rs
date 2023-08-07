@@ -1,34 +1,30 @@
-use crate::{MakeNamed, Time, MessagePacket, Handler, Addr, Actor, message_packet::ChannelFn, object_map::ObjectStore, SchedulerResult, Outbox, ActorBox, Receiver};
+use crate::{MakeNamed, Handler, Addr, Actor, message_packet::ChannelFn};
 
-impl<A, ActorNames> Addr<A, ActorNames>
- where ActorNames: MakeNamed,
-[(); ActorNames::COUNT]:
-{
-    pub fn make_channel<Message>(&self) -> Channel<Message, ActorNames>
+
+#[derive(Copy)]
+pub struct Channel<ActorNames, Message>
     where
-        A : for<'c, 'd> Receiver<'c, 'd, ActorNames, Message>,
-        //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-        for<'a, 'b> &'a mut ActorBox<ActorNames, A>: From<&'b mut <ActorNames as MakeNamed>::StorageType>,
+        ActorNames: MakeNamed,
+        Message: 'static
+{
+    pub(super) channel_fn: ChannelFn<ActorNames, Message>,
+}
+
+impl<ActorNames, Message> Channel<ActorNames, Message>
+where
+    ActorNames: MakeNamed
+{
+    pub fn new<Receiver>() -> Channel<ActorNames, Message>
+    where
+        Receiver : Handler<ActorNames, Message> + Actor<ActorNames>,
     {
         Channel {
-            channel_fn: receive_for_channel::<'a, ActorNames, A, Message>,
-            //actor_name: A::name(),
+            channel_fn: crate::message_packet::receive_for_channel::<ActorNames, Receiver, Message>,
         }
     }
 }
 
-#[derive(Copy)]
-pub struct Channel<M, ActorNames>
-    where
-        ActorNames: MakeNamed,
-        //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-        M: 'static,
-{
-    //channel_fn: fn (time: Time, message: M) -> MessagePacket<ActorNames, M>,
-    pub(super) channel_fn: for<'a> fn(packet: &'a mut MessagePacket<ActorNames, M>, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult,
-}
-
-impl<'a, M, ActorNames> Clone for Channel<M, ActorNames>
+impl<ActorNames, Message> Clone for Channel<ActorNames, Message>
     where ActorNames: MakeNamed,
         //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
         //M: 'static,
@@ -40,30 +36,15 @@ impl<'a, M, ActorNames> Clone for Channel<M, ActorNames>
     }
 }
 
-// fn channel_fn<A, M, Name>(time: Time, message: M) -> MessagePacket<Name, M>
-// where A: Handler<Name, M> + Actor<Name>,
-//       M: 'static,
-//       Name: MakeNamed,
-//       <Name as MakeNamed>::Base: crate::Actor<Name>,
-//       [(); Name::COUNT]:
-// {
-//     MessagePacket::new_channel::<A>(time, message)
-// }
-
-fn receive_for_channel<'a, ActorNames, Receiver, Message>(
-    packet: &'a mut MessagePacket<ActorNames, Message>,
-    map: &'a mut ObjectStore<ActorNames>, limit: Time
-) -> SchedulerResult
-where
-    ActorNames: MakeNamed,
-    Receiver: for<'c, 'd> crate::Receiver<'c, 'd, ActorNames, Message> + 'a,
-    //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-    // Message: 'static,
-    // Receiver: Handler<ActorNames, Message> + Actor<ActorNames> + 'b,
-    // <Receiver as Actor<ActorNames>>::OutboxType: Outbox<ActorNames>,
-    &'a mut ActorBox<ActorNames, Receiver>: for<'b> From<&'b mut <ActorNames as MakeNamed>::StorageType>,
+impl<A, ActorNames> Addr<A, ActorNames>
+ where ActorNames: MakeNamed,
 {
-    let (time, message) = unsafe { packet.take() };
-
-    Receiver::receive(map, message, time, limit)
+    pub fn make_channel<Message>(&self) -> Channel<ActorNames, Message>
+    where
+        A : Handler<ActorNames, Message> + Actor<ActorNames>,
+    {
+        Channel {
+            channel_fn: crate::message_packet::receive_for_channel::<ActorNames, A, Message>,
+        }
+    }
 }

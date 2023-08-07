@@ -1,6 +1,3 @@
-
-use std::pin::Pin;
-
 use actor_framework::*;
 use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite, WriteFinished}};
 
@@ -163,7 +160,7 @@ pub(super) struct TransferMemOwnership {
 }
 
 impl Handler<N64Actors, TransferMemOwnership> for RspActor {
-    fn recv(&mut self, outbox: &mut RspOutbox, message: TransferMemOwnership, _time: Time, _limit: Time) -> SchedulerResult {
+    fn recv(&mut self, _outbox: &mut RspOutbox, message: TransferMemOwnership, _time: Time, _limit: Time) -> SchedulerResult {
         self.imem = Some(message.imem);
         self.dmem = Some(message.dmem);
 

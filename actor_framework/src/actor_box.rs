@@ -1,7 +1,5 @@
 
-use std::{ops::DispatchFromDyn, default};
-
-use crate::{MakeNamed, MessagePacketProxy, Actor, Outbox, Handler};
+use crate::{MakeNamed, MessagePacketProxy, Actor, Outbox};
 
 #[repr(C)]
 pub struct ActorBoxBase<ActorName>
@@ -12,7 +10,6 @@ where
 }
 
 #[repr(C)]
-//#[derive(Default)]
 pub struct ActorBox<ActorNames, A>
 where
     A: Actor<ActorNames>,
@@ -36,46 +33,6 @@ where
         }
     }
 }
-
-// impl<ActorNames, A> std::ops::Deref for ActorBox<ActorNames, A>
-// where
-//     A: Actor<ActorNames>,
-//     A::OutboxType: Outbox<ActorNames>,
-//     ActorNames: MakeNamed,
-//     [(); ActorNames::COUNT]:
-// {
-//     type Target = A;
-
-//     fn deref(&self) -> &Self::Target {
-//         &self.actor
-//     }
-// }
-
-// impl<ActorNames, A> std::ops::Deref for ActorBox<ActorNames, A>
-// where
-//     A: Actor<ActorNames>,
-//     A::OutboxType: Outbox<ActorNames>,
-//     ActorNames: MakeNamed,
-//     [(); ActorNames::COUNT]:
-// {
-//     type Target = dyn Actor<ActorNames, OutboxType=A::OutboxType>;
-
-//     fn deref(&self) -> &Self::Target {
-//         &self.actor
-//     }
-// }
-
-// impl<ActorNames, A> std::ops::DerefMut for ActorBox<ActorNames, A>
-// where
-//     A: Actor<ActorNames>,
-//     A::OutboxType: Outbox<ActorNames>,
-//     ActorNames: MakeNamed,
-//     [(); ActorNames::COUNT]:
-// {
-//     fn deref_mut(&mut self) -> &mut Self::Target {
-//         &mut self.actor
-//     }
-// }
 
 pub trait AsBase<ActorNames>
 where

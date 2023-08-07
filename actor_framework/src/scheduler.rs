@@ -1,12 +1,10 @@
 
-use crate::{object_map::{ObjectStore}, Time, Actor, MakeNamed, actor_box::AsBase};
+use crate::{object_map::ObjectStore, Time, MakeNamed, actor_box::AsBase};
 
 pub struct Scheduler<ActorNames> where
     ActorNames: MakeNamed,
-    //<ActorNames as MakeNamed>::Base<A>: Actor<ActorNames, A>,
     <ActorNames as MakeNamed>::StorageType: Default,
     usize: From<ActorNames>,
-    [(); ActorNames::COUNT]:
 {
     actors: ObjectStore<ActorNames>,
     count: u64,
@@ -16,10 +14,8 @@ pub struct Scheduler<ActorNames> where
 impl<ActorNames> Drop for Scheduler<ActorNames>
 where
     ActorNames: MakeNamed,
-    //<ActorNames as MakeNamed>::Base: Actor<ActorNames>,
     <ActorNames as MakeNamed>::StorageType: Default,
     usize: From<ActorNames>,
-    [(); ActorNames::COUNT]:
 {
     fn drop(&mut self) {
         eprintln!("Scheduler ran {} times", self.count);
@@ -30,9 +26,7 @@ where
 impl<ActorNames> Scheduler<ActorNames> where
 ActorNames: MakeNamed,
     usize: From<ActorNames>,
-    //<ActorNames as MakeNamed>::Base: Actor<ActorNames>,
     <ActorNames as MakeNamed>::StorageType: Default + AsBase<ActorNames>,
-    [(); ActorNames::COUNT]:,
  {
     pub fn new() -> Scheduler<ActorNames> {
         let actors = ObjectStore::new();
@@ -67,18 +61,10 @@ ActorNames: MakeNamed,
     fn run_inner<'a>(&'a mut self, sender_id: ActorNames, limit: Time) -> SchedulerResult {
         self.count += 1;
 
-         // PERF: Going though this trait object is potentially problematic for performance.
-        //        Might need to look into Arbitrary Self Types or another nasty unsafe hack
         let execute_fn = self.actors.get_base(sender_id).outbox.execute_fn;
 
-        // FIXME: Hack that makes lifetimes work for now
-        let efn: crate::message_packet::ExecuteFn<'a, ActorNames> = unsafe {
-            std::mem::transmute(execute_fn)
-        };
-
         //println!("Running actor {:?} at time {:?}", sender_id, message.time);
-
-        (efn)(sender_id, &mut self.actors, limit)
+        (execute_fn)(sender_id, &mut self.actors, limit)
     }
 
     #[inline(never)]

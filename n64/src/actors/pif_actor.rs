@@ -1,9 +1,8 @@
-use std::pin::Pin;
 
 /// PifActor: Emulates the SI (Serial Interface) and the connected PIF
 
 
-use actor_framework::{Actor, Time, Handler, make_outbox, Outbox, OutboxSend, SchedulerResult};
+use actor_framework::{Actor, Time, Handler, make_outbox, OutboxSend, SchedulerResult};
 use super::{N64Actors, si_actor::{SiPacket, SiActor}};
 
 use crate::{pif, cic};
@@ -36,11 +35,6 @@ impl Default for PifActor {
             .try_into()
             .expect("Incorrect PIF Rom size");
 
-        //let mut outbox = PifOutbox::default();
-        //outbox.send::<PifActor>(PifHleMain{}, 100.into());
-
-        todo!("default");
-
         PifActor {
             pif_mem,
             state: PifState::WaitCmd,
@@ -56,6 +50,10 @@ impl Default for PifActor {
 
 impl Actor<N64Actors> for PifActor {
     type OutboxType = PifOutbox;
+
+    fn init(&mut self, outbox: &mut PifOutbox, time: Time) {
+        outbox.send::<Self>(PifHleMain{}, time);
+    }
 
     fn message_delivered(&mut self, outbox: &mut PifOutbox, _: Time) {
         let time = self.pif_time;
@@ -265,7 +263,7 @@ impl pif::PifIO for PifHleIoProxy<'_> {
 struct PifHleMain {}
 
 impl Handler<N64Actors, PifHleMain> for PifActor {
-    fn recv(&mut self, outbox: &mut PifOutbox,  _: PifHleMain, time: Time, _: Time) -> SchedulerResult {
+    fn recv(&mut self, _outbox: &mut PifOutbox,  _: PifHleMain, time: Time, _: Time) -> SchedulerResult {
         let (pif_core, mut io) = PifHleIoProxy::split(self);
 
         self.pif_time = pif_core.main(&mut io, time);

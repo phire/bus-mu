@@ -1,12 +1,9 @@
 
-use std::pin::Pin;
-
-use actor_framework::{Time, Actor, MessagePacketProxy, Handler, Outbox, OutboxSend, SchedulerResult};
+use actor_framework::{Time, Actor,  Handler, OutboxSend, SchedulerResult};
 
 use super::{N64Actors, bus_actor::{BusAccept, BusRequest, BusActor}, cpu_actor::{CpuRegRead, CpuActor, ReadFinished, CpuRegWrite, WriteFinished}, pif_actor::PifActor};
 
 pub struct SiActor {
-    outbox: SiOutbox,
     buffer: [u32; 16],
     state: SiState,
     next_state: SiState,
@@ -20,7 +17,6 @@ pub struct SiActor {
 impl Default for SiActor {
     fn default() -> Self {
         SiActor {
-            outbox: Default::default(),
             buffer: [0; 16],
             state: SiState::Idle,
             next_state: SiState::Idle,
@@ -48,19 +44,19 @@ impl Actor<N64Actors> for SiActor {
     fn message_delivered(&mut self, outbox: &mut SiOutbox, time: Time) {
         if let Some((msg_time, message)) = self.queued_message.take() {
             println!("Si: sending queued message {:?} to time {} at {}", message, u64::from(msg_time), time);
-            self.outbox.send::<PifActor>(message, msg_time);
+            outbox.send::<PifActor>(message, msg_time);
         } else if self.dma_active {
-            self.bus_request(time)
+            self.bus_request(outbox, time)
         }
     }
 }
 
 impl SiActor {
-    fn bus_request(&mut self, time: Time) {
-        self.outbox.send::<BusActor>(BusRequest::new::<Self>(1), time);
+    fn bus_request(&mut self, outbox: &mut SiOutbox, time: Time) {
+        outbox.send::<BusActor>(BusRequest::new::<Self>(1), time);
     }
 
-    fn pif_read(&mut self, pif_addr: u16, time: Time) {
+    fn pif_read(&mut self, outbox: &mut SiOutbox, pif_addr: u16, time: Time) {
         let mut time64 : u64 = time.into();
 
         // align with 4 cycle boundary
@@ -72,7 +68,7 @@ impl SiActor {
         self.next_state = SiState::CpuRead;
         self.state = SiState::WaitAck;
 
-        self.outbox.send::<PifActor>(SiPacket::Read4(pif_addr), time64.into());
+        outbox.send::<PifActor>(SiPacket::Read4(pif_addr), time64.into());
     }
 }
 
@@ -125,18 +121,18 @@ impl Handler<N64Actors, CpuRegRead> for SiActor {
                     }
                     _ => unreachable!()
                 };
-                if self.outbox.contains::<SiPacket>() {
-                    self.queued_message = Some(self.outbox.cancel());
+                if outbox.contains::<SiPacket>() {
+                    self.queued_message = Some(outbox.cancel());
                 }
 
-                self.outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
+                outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
             }
             0x1fc0_0000..=0x1fc0_07ff => { // PIF ROM/RAM
                 let pif_address = (address >> 2) as u16 & 0x1ff;
 
                 match self.state {
                     SiState::Idle => {
-                        self.pif_read(pif_address, time);
+                        self.pif_read(outbox, pif_address, time);
                     }
                     _ => {
                         // Hardware tests indicate PIF will block reads until the previous write finishes.
@@ -198,11 +194,11 @@ impl Handler<N64Actors, CpuRegWrite> for SiActor {
                     }
                     _ => unreachable!()
                 };
-                self.outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
+                outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
             }
             0x1fc0_0000..=0x1fc0_07ff => { // PIF ROM/RAM
                 // Accept the write instantly
-                self.outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
+                outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
 
                 let pif_address = (address >> 2) as u16 & 0x1ff;
                 let mut time64 : u64 = time.into();
@@ -252,15 +248,15 @@ impl Handler<N64Actors, SiPacket> for SiActor {
                 req_time = time.add(4);
                 self.state = match self.next_state {
                     SiState::CpuRead => {
-                        self.outbox.send::<PifActor>(SiPacket::Ack, req_time);
+                        outbox.send::<PifActor>(SiPacket::Ack, req_time);
                         SiState::CpuRead
                     }
                     SiState::CpuWrite => {
-                        self.outbox.send::<PifActor>(SiPacket::Data4(self.buffer[15]), req_time);
+                        outbox.send::<PifActor>(SiPacket::Data4(self.buffer[15]), req_time);
                         SiState::CpuWrite
                     }
                     SiState::DmaRead(count) => {
-                        self.outbox.send::<PifActor>(SiPacket::Ack, req_time);
+                        outbox.send::<PifActor>(SiPacket::Ack, req_time);
                         SiState::DmaRead(count)
                     }
                     _ => unimplemented!()
@@ -280,7 +276,7 @@ impl Handler<N64Actors, SiPacket> for SiActor {
             }
             SiPacket::Finish => {
                 if let Some(pif_addr) = self.queued_read.take() {
-                    self.pif_read(pif_addr, time);
+                    self.pif_read(outbox, pif_addr, time);
                 } else {
                     self.state = SiState::Idle;
                 }
@@ -288,7 +284,7 @@ impl Handler<N64Actors, SiPacket> for SiActor {
             }
             _ => panic!("Invalid message")
         }
-        self.bus_request(req_time);
+        self.bus_request(outbox, req_time);
 
         SchedulerResult::Ok
     }
@@ -309,7 +305,7 @@ impl Handler<N64Actors, BusAccept> for SiActor {
         //let time = time.add(4 * 32);
         self.state = match self.state {
             SiState::CpuRead => {
-                self.outbox.send::<CpuActor>(
+                outbox.send::<CpuActor>(
                     ReadFinished::word(self.buffer[15]),
                     time);
                 SiState::Idle
@@ -320,7 +316,7 @@ impl Handler<N64Actors, BusAccept> for SiActor {
                 //SiState::Idle
             }
             SiState::CpuWrite => {
-                self.outbox.send::<CpuActor>(WriteFinished::word(), time);
+                outbox.send::<CpuActor>(WriteFinished::word(), time);
                 SiState::Idle
             }
             SiState::DmaWrite(1) => {
@@ -329,7 +325,7 @@ impl Handler<N64Actors, BusAccept> for SiActor {
                 //     true => SiPacket::Data64(self.buffer),
                 //     false => SiPacket::Data4(self.buffer[15])
                 // };
-                // self.outbox.send::<PifActor>(data_msg, time);
+                // outbox.send::<PifActor>(data_msg, time);
                 // SiState::Idle
             }
             SiState::DmaRead(count) => {

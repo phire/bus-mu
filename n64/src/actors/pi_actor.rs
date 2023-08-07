@@ -1,5 +1,4 @@
 
-use std::pin::Pin;
 
 use actor_framework::*;
 use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite, WriteFinished}};
@@ -200,7 +199,7 @@ impl Handler<N64Actors, PiRead> for PiActor {
 }
 
 impl Handler<N64Actors, PiWrite> for PiActor {
-    fn recv(&mut self, outbox: &mut PiOutbox, message: PiWrite, _time: Time, _limit: Time) -> SchedulerResult {
+    fn recv(&mut self, _outbox: &mut PiOutbox, message: PiWrite, _time: Time, _limit: Time) -> SchedulerResult {
         todo!("PI write {:#010x} = {:#010x}", message.cart_addr, message.data);
     }
 }

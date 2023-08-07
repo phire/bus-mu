@@ -1,8 +1,3 @@
-// FIXME: can we do it without this?
-#![allow(incomplete_features)]
-#![feature(generic_const_exprs)]
-
-#![feature(arbitrary_self_types)]
 
 pub mod actors;
 pub mod vr4300;

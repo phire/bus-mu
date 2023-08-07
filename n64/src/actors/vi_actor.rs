@@ -1,6 +1,3 @@
-
-use std::pin::Pin;
-
 use actor_framework::*;
 use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite, WriteFinished}};
 

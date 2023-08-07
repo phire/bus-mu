@@ -1,5 +1,4 @@
 
-use std::pin::Pin;
 
 use actor_framework::*;
 use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite, WriteFinished}};
@@ -29,9 +28,6 @@ impl Default for AiActor {
 
 impl Actor<N64Actors> for AiActor {
     type OutboxType = AiOutbox;
-    fn message_delivered(&mut self, outbox: &mut Self::OutboxType, _time: Time) {
-        // do nothing
-    }
 }
 
 impl Handler<N64Actors, CpuRegWrite> for AiActor {

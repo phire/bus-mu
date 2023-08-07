@@ -1,6 +1,6 @@
 // TODO: Think of better name for named
 
-use std::{marker::PhantomData, pin::Pin};
+use std::marker::PhantomData;
 
 use crate::{ActorBox, Actor};
 

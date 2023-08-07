@@ -80,15 +80,6 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
                     &mut storage.#name
                 }
             }
-
-            impl<'a, 'b> From<&'a mut #storage_type> for &'b mut #base<#ident, #class_path>
-            //where 'a: 'b
-             {
-                #[inline(always)]
-                fn from(storage: &'a mut #storage_type) -> Self {
-                    &mut storage.#name
-                }
-            }
         });
     }
 
@@ -112,7 +103,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
             }
         }
 
-        struct #storage_type {
+        pub struct #storage_type {
             #(#storage_patterns)*
         }
 
@@ -151,8 +142,6 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
             }
         }
     };
-
-    println!("{}", output);
 
     output.into()
 }

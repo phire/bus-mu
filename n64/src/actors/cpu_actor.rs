@@ -1,9 +1,8 @@
 
-use std::pin::Pin;
 
 /// CpuActor: Emulates the CPU and MI (Mips Interface)
 
-use actor_framework::{Actor, Time, Handler, Outbox, OutboxSend, SchedulerResult, MessagePacketProxy};
+use actor_framework::{Actor, Time, Handler,  OutboxSend, SchedulerResult};
 use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor, pi_actor::{PiActor, self}, vi_actor::ViActor, ai_actor::AiActor, rdp_actor::RdpActor};
 
 use crate::{vr4300::{self}, actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::{RspActor, self}}};
@@ -54,7 +53,7 @@ fn to_bus_time(cpu_time: u64, odd: u64) -> u64 {
 
 impl Default for CpuActor {
     fn default() -> Self {
-        let mut actor = CpuActor {
+        CpuActor {
             committed_time: Default::default(),
             _cpu_overrun: 0,
             cpu_core: Default::default(),
@@ -63,11 +62,7 @@ impl Default for CpuActor {
             outstanding_mem_request: None,
             bus_free: Default::default(),
             recursion: 0,
-        };
-        todo!();
-        //actor.outbox.send::<CpuActor>(CpuRun {}, Default::default());
-
-        actor
+        }
     }
 }
 
@@ -195,6 +190,10 @@ impl CpuActor {
 impl Actor<N64Actors> for CpuActor {
     type OutboxType = CpuOutbox;
 
+    fn init(&mut self, outbox: &mut CpuOutbox, time: Time) {
+        outbox.send::<CpuActor>(CpuRun {}, time);
+    }
+
     fn message_delivered(&mut self, _outbox: &mut CpuOutbox, _time: Time) {
         self.recursion = 0;
     }
@@ -240,8 +239,8 @@ pub struct CpuRegWrite {
 impl CpuActor {
     fn do_reg<Dest>(&mut self, outbox: &mut CpuOutbox, reason: vr4300::Reason, time: Time)
     where
-        Dest: for<'a, 'b> actor_framework::Receiver<'a, 'b, N64Actors, CpuRegRead>
-            + for<'a, 'b> actor_framework::Receiver<'a, 'b, N64Actors, CpuRegWrite>
+        Dest: Handler<N64Actors, CpuRegRead>
+            + Handler<N64Actors, CpuRegWrite>
     {
         match reason {
             vr4300::Reason::BusRead32(_, address) => {
