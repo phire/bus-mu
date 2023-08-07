@@ -65,7 +65,7 @@ pub enum MemoryReq
 {
     ICacheFill(u32),
     DCacheFill(u32),
-    DCacheReplace(u32, u32, [u8; 16]),
+    DCacheReplace(u32, u32, [u32; 4]),
     UncachedInstructionRead(u32),
     UncachedDataRead(u32, u8),
     UncachedDataWrite(u32, u8, u64),
@@ -74,7 +74,7 @@ pub enum MemoryReq
 pub enum MemoryResponce
 {
     ICacheFill([u32; 8]),
-    DCacheFill([u8; 16]),
+    DCacheFill([u32; 4]),
     UncachedInstructionRead(u32),
     UncachedDataRead(u64),
     UncachedDataWrite,
@@ -644,6 +644,7 @@ impl Pipeline {
         }
     }
 
+    #[inline(always)]
     pub fn memory_responce(&mut self, info: MemoryResponce, icache: &mut ICache,
         dcache: &mut DCache) {
         match info {

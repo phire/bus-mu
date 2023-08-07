@@ -161,14 +161,14 @@ impl ICache {
 }
 
 pub struct DCache {
-    data: [[u8; 16]; 512],
+    data: [[u32; 4]; 512],
     tag: [CacheTag; 512],
 }
 
 impl DCache {
     pub fn new() -> DCache {
         DCache {
-            data: [[0; 16]; 512],
+            data: [[0; 4]; 512],
             tag: [CacheTag::invalid(); 512],
         }
     }
@@ -227,26 +227,37 @@ impl DataCacheAttempt {
     }
 
     pub fn write(self, dcache: &mut DCache, size: usize, data: u64) {
-        // PERF: check if this function produces good code
-        let start = self.offset as usize;
-        let data_bytes = data.to_le_bytes();
-        for i in 0..(size as usize) {
-            dcache.data[self.line as usize][start + i] = data_bytes[i];
+        let word_offset = self.offset as usize >> 2;
+        let line = self.line as usize;
+        match size {
+            4 => {
+                dcache.data[line][word_offset] = data as u32;
+            }
+            8 => {
+                dcache.data[line][word_offset] = (data >> 32) as u32;
+                dcache.data[line][word_offset + 1] = data as u32;
+            }
+            _ => todo!("Implement smaller writes")
         }
     }
 
     pub fn read(self, dcache: &DCache, size: usize) -> u64 {
-        // PERF: check if this function produces good code
-        let start = self.offset as usize;
-        let mut data_bytes = [0; 8];
-        for i in 0..size {
-            data_bytes[i] = dcache.data[self.line as usize][start + size - i];
+        let word_offset = self.offset as usize >> 2;
+        let line = self.line as usize;
+        return match size {
+            4 => {
+                dcache.data[line][word_offset] as u64
+            }
+            8 => {
+                let upper = dcache.data[line][word_offset] as u64;
+                let lower = dcache.data[line][word_offset + 1] as u64;
+                upper << 32 | lower
+            }
+            _ => todo!("Implement smaller writes")
         }
-
-        return u64::from_le_bytes(data_bytes);
     }
 
-    pub fn finish_fill(&mut self, dcache: &mut DCache, new_tag: CacheTag, data: [u8; 16]) {
+    pub fn finish_fill(&mut self, dcache: &mut DCache, new_tag: CacheTag, data: [u32; 4]) {
         self.tag = new_tag;
         dcache.data[self.line as usize] = data;
         dcache.tag[self.line as usize] = new_tag;

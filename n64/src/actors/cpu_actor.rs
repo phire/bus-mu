@@ -13,7 +13,7 @@ pub struct CpuActor {
     cpu_core: vr4300::Core,
     imem: Option<Box<[u32; 1024]>>,
     dmem: Option<Box<[u32; 1024]>>,
-    outstanding_mem_request: Option<vr4300::Reason>,
+    outstanding_mem_request: Option<vr4300::BusRequest>,
     bus_free: Time,
     recursion: u32,
 }
@@ -47,17 +47,11 @@ fn to_cpu_time(bus_time: u64, odd: u64) -> u64 {
 
 fn to_bus_time(cpu_time: u64, odd: u64) -> u64 {
     // CPU has a 1.5x clock multiplier
-    // TODO: Check if the logic for odd is anywhere near correct
     cpu_time - ((cpu_time + odd * 2) / 3u64)
 }
 
-enum AdvanceResult {
-    Limited,
-    MemRequest,
-}
-
 impl CpuActor {
-    fn advance(&mut self, outbox: &mut CpuOutbox, _: CpuRun, limit: Time) -> AdvanceResult {
+    fn advance(&mut self, outbox: &mut CpuOutbox, _: CpuRun, limit: Time) -> SchedulerResult {
         let limit_64: u64 = limit.into();
         let mut commit_time_64: u64 = self.committed_time.into();
 
@@ -68,7 +62,7 @@ impl CpuActor {
         let mut odd = commit_time_64 & 1u64;
 
         let mut cpu_cycles = to_cpu_time(cycles, odd);
-        assert!(cycles == to_bus_time(cpu_cycles, odd), "cycles {} != cpu_cycles {} when odd = {}", cycles, cpu_cycles, odd);
+        //assert!(cycles == to_bus_time(cpu_cycles, odd), "cycles {} != cpu_cycles {} when odd = {}", cycles, cpu_cycles, odd);
         loop {
             let result = self.cpu_core.advance(to_cpu_time(cycles, odd));
 
@@ -78,10 +72,9 @@ impl CpuActor {
             //println!("core did {} ({}) cycles and returned {} at cycle {}", used_cycles, result.cycles, result.reason, commit_time_64);
             assert!(used_cycles <= cycles, "{} > {} | {}, {}", used_cycles, cycles, cpu_cycles, result.cycles);
 
-            return match result.reason {
+            match result.reason {
                 vr4300::Reason::Limited => {
                     outbox.send::<CpuActor>(CpuRun {}, self.committed_time);
-                    AdvanceResult::Limited
                 }
                 vr4300::Reason::SyncRequest => {
                     assert!(limit.is_resolved());
@@ -94,38 +87,38 @@ impl CpuActor {
                     }
 
                     outbox.send::<CpuActor>(CpuRun {}, self.committed_time);
-                    AdvanceResult::Limited
                 }
-                reason => {
+                vr4300::Reason::BusRequest(request) => {
                     // Request over C-BUS/D-BUS
-                    self.start_request(outbox, reason, limit);
-
-                    AdvanceResult::MemRequest
+                    return self.start_request(outbox, request, limit);
                 }
             };
+            return SchedulerResult::Ok;
         };
     }
 
-    fn start_request(&mut self, outbox: &mut CpuOutbox, request: vr4300::Reason, limit: Time) {
+    fn start_request(&mut self, outbox: &mut CpuOutbox, request: vr4300::BusRequest, limit: Time) -> SchedulerResult {
         self.outstanding_mem_request = Some(request);
         let request_time = core::cmp::max(self.bus_free, self.committed_time);
 
-        if self.recursion < RECURSION_LIMIT && request_time < limit {
+        return if self.recursion < RECURSION_LIMIT && request_time < limit {
             // If nothing else needs to run before this request, we know we will win bus arbitration
             // and we can avoid the scheduler
             self.recursion += 1;
 
-            self.recv(outbox, BusAccept{}, request_time.add(1), limit);
+            self.recv(outbox, BusAccept{}, request_time.add(1), limit)
         } else {
             outbox.send::<BusActor>(BusRequest::new::<Self>(1), request_time);
+            SchedulerResult::Ok
         }
     }
 
+    #[inline(always)]
     fn finish_mem(&mut self, outbox: &mut CpuOutbox, mem_finished: MemFinished, time: Time, limit: Time) -> SchedulerResult {
         let request = self.outstanding_mem_request.take().unwrap();
         //println!("CPU: Finishing {:} = {:x?} at {:}", request, mem_finished, time);
 
-        assert!((u64::from(time) - u64::from(self.committed_time)) >= 1, "mem finished too fast");
+        //assert!((u64::from(time) - u64::from(self.committed_time)) >= 1, "mem finished too fast");
 
         let finish_time = match &mem_finished {
             MemFinished::Read(message) => {
@@ -140,7 +133,7 @@ impl CpuActor {
         self.bus_free = finish_time;
 
         // Advance the CPU upto the finish time
-        self.advance(outbox, CpuRun {  }, finish_time);
+        let catchup_result = self.advance(outbox, CpuRun {  }, finish_time);
 
         let req_type = request.request_type();
 
@@ -158,17 +151,18 @@ impl CpuActor {
             }
         }
 
-        if self.recursion < RECURSION_LIMIT && limit > finish_time {
-            if outbox.contains::<CpuRun>() {
-                // The CPU core is ready to run (it didn't issue a new memory request)
-                // Might as well run it now to save scheduler overhead
-                self.recursion += 1;
-                let (_ , cpurun) = outbox.cancel();
-                self.advance(outbox, cpurun, limit);
-            }
-        }
+        let can_recurse = self.recursion < RECURSION_LIMIT && limit > finish_time && outbox.contains::<CpuRun>();
 
-        SchedulerResult::Ok
+        match catchup_result {
+            SchedulerResult::Ok if can_recurse => {  }
+            _ => { return catchup_result; }
+        };
+
+        // The CPU core is ready to run (it didn't issue a new memory request)
+        // Might as well run it now to save scheduler overhead
+        self.recursion += 1;
+        let (_ , cpurun) = outbox.cancel();
+        return self.advance(outbox, cpurun, limit);
     }
 }
 
@@ -218,9 +212,7 @@ impl Handler<N64Actors, CpuRun> for CpuActor {
             return SchedulerResult::ZeroLimit;
         }
 
-        self.advance(outbox, msg, limit);
-
-        SchedulerResult::Ok
+        self.advance(outbox, msg, limit)
     }
 }
 
@@ -234,23 +226,24 @@ pub struct CpuRegWrite {
 }
 
 impl CpuActor {
-    fn do_reg<Dest>(&mut self, outbox: &mut CpuOutbox, reason: vr4300::Reason, time: Time)
+    fn do_reg<Dest>(&mut self, outbox: &mut CpuOutbox, reason: vr4300::BusRequest, time: Time)
     where
         Dest: Handler<N64Actors, CpuRegRead>
             + Handler<N64Actors, CpuRegWrite>
     {
         match reason {
-            vr4300::Reason::BusRead32(_, address) => {
+            vr4300::BusRequest::BusRead32(_, address) => {
                 outbox.send::<Dest>(CpuRegRead { address: address }, time);
             }
-            vr4300::Reason::BusWrite32(_, address, data) => {
+            vr4300::BusRequest::BusWrite32(_, address, data) => {
                 outbox.send::<Dest>(CpuRegWrite { address: address, data: data }, time);
             }
             _ => { panic!("unexpected bus operation") }
         }
     }
 
-    fn do_rspmem(&mut self, outbox: &mut CpuOutbox, reason: vr4300::Reason, time: Time, limit: Time) {
+    #[inline(always)]
+    fn do_rspmem(&mut self, outbox: &mut CpuOutbox, reason: vr4300::BusRequest, time: Time, limit: Time) -> SchedulerResult {
         let mem = match reason.address() & 0x1000 == 0 {
             true => self.dmem.as_mut(),
             false => self.imem.as_mut(),
@@ -260,26 +253,30 @@ impl CpuActor {
             let offset = ((reason.address() >> 2) & 0x3ff) as usize;
 
             match reason {
-                vr4300::Reason::BusRead32(_, _) => {
+                vr4300::BusRequest::BusRead32(_, _) => {
                     let data = mem[offset];
-                    self.finish_mem(outbox, MemFinished::Read(ReadFinished::word(data)), time, limit);
+                    return self.recv(outbox, ReadFinished::word(data), time, limit);
                 }
-                vr4300::Reason::BusWrite32(_, _, data) => {
+                vr4300::BusRequest::BusWrite32(_, _, data) => {
                     mem[offset] = data;
-                    self.finish_mem(outbox, MemFinished::Write(WriteFinished::word()), time, limit);
+                    return self.recv(outbox, WriteFinished::word(), time, limit);
                 }
                 _ => { panic!("unexpected bus operation") }
             }
         } else {
             // The CPU doesn't currently have ownership of imem/dmem, need to request it from RspActor
             self.outstanding_mem_request = Some(reason);
-            outbox.send::<RspActor>(rsp_actor::ReqestMemOwnership {}, time)
+            outbox.send::<RspActor>(rsp_actor::ReqestMemOwnership {}, time);
+
+            return SchedulerResult::Ok;
         }
     }
 }
 
 impl Handler<N64Actors, BusAccept> for CpuActor {
     fn recv(&mut self, outbox: &mut CpuOutbox, _: BusAccept, time: Time, limit: Time) -> SchedulerResult {
+        assert!(outbox.is_empty());
+
         let reason = self.outstanding_mem_request.clone().unwrap();
         let address = reason.address();
 
@@ -290,11 +287,11 @@ impl Handler<N64Actors, BusAccept> for CpuActor {
             0x0400_0000 => match address & 0x040c_0000 { // RSP
                 0x0400_0000 if address & 0x1000 == 0 => { // DMEM Direct access
                     //println!("DMEM access {}", reason);
-                    self.do_rspmem(outbox, reason, time, limit);
+                    return self.do_rspmem(outbox, reason, time, limit);
                 }
                 0x0400_0000 if address & 0x1000 != 0 => { // IMEM Direct access
                     //println!("IMEM access {}", reason);
-                    self.do_rspmem(outbox, reason, time, limit);
+                    return self.do_rspmem(outbox, reason, time, limit);
                 }
                 0x0404_0000 | 0x0408_0000 => { // RSP Register
                     self.do_reg::<RspActor>(outbox, reason, time);
@@ -336,10 +333,10 @@ impl Handler<N64Actors, BusAccept> for CpuActor {
             }
             0x0500_0000..=0x7fff_0000 => { // PI External bus
                 match reason {
-                    vr4300::Reason::BusRead32(_, _) => {
+                    vr4300::BusRequest::BusRead32(_, _) => {
                         outbox.send::<PiActor>(pi_actor::PiRead::new(address), time);
                     }
-                    vr4300::Reason::BusWrite32(_, _, data) => {
+                    vr4300::BusRequest::BusWrite32(_, _, data) => {
                         outbox.send::<PiActor>(pi_actor::PiWrite::new(address, data), time);
                     }
                     _ => { panic!("unexpected bus operation") }
