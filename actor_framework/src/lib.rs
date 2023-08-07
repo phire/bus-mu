@@ -3,6 +3,7 @@
 
 mod actor_box;
 mod addr;
+mod channel;
 mod endpoint;
 mod message_packet;
 mod scheduler;
@@ -14,6 +15,7 @@ mod outbox;
 
 pub use actor_box::{ActorBox, ActorBoxBase, AsBase};
 pub use addr::Addr;
+pub use channel::Channel;
 pub use endpoint::Endpoint;
 pub use named::{Named, MakeNamed};
 pub use named_derive::Named;

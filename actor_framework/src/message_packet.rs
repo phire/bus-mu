@@ -2,7 +2,7 @@
 
 use std::{mem::{MaybeUninit, ManuallyDrop}, any::TypeId};
 
-use crate::{object_map::{ObjectStore, ObjectStoreView}, MakeNamed, Time, Handler, Actor, Endpoint, SchedulerResult, OutboxSend};
+use crate::{object_map::{ObjectStore, ObjectStoreView}, MakeNamed, Time, Handler, Actor, Endpoint, SchedulerResult, OutboxSend, channel::Channel};
 
 pub type ExecuteFn<ActorNames> = for<'a> fn(sender_id: ActorNames, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult;
 pub type EndpointFn<ActorNames, Message> =
@@ -37,7 +37,7 @@ where
     data: MaybeUninit<ManuallyDrop<Message>>,
 }
 
-fn direct_execute<'a, ActorNames, Sender, Receiver, Message>(_: ActorNames, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
+pub fn direct_execute<'a, ActorNames, Sender, Receiver, Message>(_: ActorNames, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
 where
     ActorNames: MakeNamed,
     Message: 'static,
@@ -107,7 +107,7 @@ where
     panic!("Scheduler tried to execute an empty message");
 }
 
-fn null_channel<ActorNames, Message>(_packet: ObjectStoreView<'_, ActorNames, MessagePacket<ActorNames, Message>>, _: Time) ->  SchedulerResult
+fn null_endpoint<ActorNames, Message>(_packet: ObjectStoreView<'_, ActorNames, MessagePacket<ActorNames, Message>>, _: Time) ->  SchedulerResult
 where
     ActorNames: MakeNamed,
 {
@@ -151,7 +151,7 @@ where
             //         template here. It relies on this function for type checking
             execute_fn: direct_execute::<ActorNames, Sender, Receiver, Message>,
             msg_type: TypeId::of::<Message>(),
-            endpoint_fn: null_channel::<ActorNames, Message>,
+            endpoint_fn: null_endpoint::<ActorNames, Message>,
             data: MaybeUninit::new(ManuallyDrop::new(data)),
         }
     }
@@ -168,6 +168,20 @@ where
             execute_fn: endpoint_execute::<ActorNames, Sender, Message>,
             msg_type: TypeId::of::<Message>(),
             endpoint_fn: endpoint.endpoint_fn,
+            data: MaybeUninit::new(ManuallyDrop::new(data)),
+        }
+    }
+
+    pub fn from_channel<Sender>(channel: Channel<ActorNames, Sender, Message>, data: Message, time: Time) -> Self
+    where
+        Sender: Actor<ActorNames>,
+    {
+        Self {
+            time,
+            // Safety: Channel::new ensures that the execute_fn is correct
+            execute_fn: channel.execute_fn,
+            msg_type: TypeId::of::<Message>(),
+            endpoint_fn: null_endpoint::<ActorNames, Message>,
             data: MaybeUninit::new(ManuallyDrop::new(data)),
         }
     }
@@ -211,7 +225,7 @@ where
             time: Time::MAX,
             execute_fn: null_execute::<ActorNames>,
             msg_type: TypeId::of::<()>(),
-            endpoint_fn: null_channel::<ActorNames, ()>,
+            endpoint_fn: null_endpoint::<ActorNames, ()>,
             data: MaybeUninit::new(ManuallyDrop::new(())),
         }
     }

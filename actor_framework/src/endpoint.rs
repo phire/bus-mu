@@ -1,6 +1,13 @@
 use crate::{MakeNamed, Handler, Addr, Actor, message_packet::EndpointFn};
 
-
+/// An Endpoint is half of a `Channel`.
+/// The Receiver and Message type is known at compile time but the Sender is dynamically dispatched.
+///
+/// Not only does this extra level dynamic dispatch add some overhead, but it prevents some inlining
+/// based optimizations in `Scheduler`.
+///
+/// So `Channel` should be preferred if it's possible to know both the Sender and Receiver at compile time,
+/// as it uses static dispatch.
 #[derive(Copy)]
 pub struct Endpoint<ActorNames, Message>
     where

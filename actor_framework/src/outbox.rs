@@ -1,4 +1,4 @@
-use crate::{MakeNamed, MessagePacketProxy, Handler, Actor, Time, Endpoint, MessagePacket};
+use crate::{MakeNamed, Handler, Actor, Time, Endpoint, MessagePacket, channel::Channel};
 
 
 pub trait Outbox<ActorNames>
@@ -6,17 +6,21 @@ where
     ActorNames: MakeNamed,
 {
     type Sender;
-    //fn as_mut(&mut self) -> &mut MessagePacketProxy<ActorNames>;
-    //fn as_ref(&self) -> &MessagePacketProxy<ActorNames>;
 }
 
-pub trait OutboxSend<ActorNames, Message>
+pub trait OutboxSend<ActorNames, Message> : Outbox<ActorNames>
 where
     ActorNames: MakeNamed,
 {
     fn send<Receiver>(&mut self, message: Message, time: Time)
     where
-        Receiver: Handler<ActorNames, Message> + Actor<ActorNames>;
+        Receiver: Handler<ActorNames, Message> + Actor<ActorNames>
+    ;
+    fn send_channel<Sender>(&mut self, channel: Channel<ActorNames, Sender, Message>, message: Message, time: Time)
+    where
+        Sender: Actor<ActorNames>,
+        Self: Outbox<ActorNames, Sender=Sender>,
+    ;
     fn send_endpoint(&mut self, endpoint: Endpoint<ActorNames, Message>, message: Message, time: Time);
     fn cancel(&mut self) -> (Time, Message);
     fn as_packet<'a>(&'a mut self) -> Option<&'a mut MessagePacket<ActorNames, Message>>;
@@ -130,6 +134,16 @@ macro_rules! make_outbox {
                     <Self as actor_framework::Outbox<$name_type>>::Sender,
                     Receiver>(time, message));
             }
+            fn send_channel<Sender>(&mut self, channel: actor_framework::Channel<$name_type, Sender, $field_type>, message: $field_type, time: Time)
+            where
+                Sender: Actor<$name_type>,
+                Self: actor_framework::Outbox<$name_type, Sender=Sender>,
+            {
+                assert!(self.is_empty());
+
+                self.$field_ident = core::mem::ManuallyDrop::new(
+                    actor_framework::MessagePacket::from_channel(channel, message, time));
+            }
 
             // fn send_addr<Receiver>(&mut self, addr: &actor_framework::Addr<Receiver, $name_type>, message: $field_type, time: Time)
             // where
@@ -140,6 +154,8 @@ macro_rules! make_outbox {
 
             fn send_endpoint(&mut self, endpoint: actor_framework::Endpoint<$name_type, $field_type>, message: $field_type, time: Time)
             {
+                assert!(self.is_empty());
+
                 self.$field_ident = core::mem::ManuallyDrop::new(
                         actor_framework::MessagePacket::from_endpoint::<
                             <Self as actor_framework::Outbox<$name_type>>::Sender>
