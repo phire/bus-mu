@@ -10,6 +10,7 @@ mod time;
 //mod enum_map;
 mod object_map;
 mod named;
+mod outbox;
 
 pub use actor_box::{ActorBox, ActorBoxBase, AsBase};
 pub use addr::Addr;
@@ -18,7 +19,7 @@ pub use named::{Named, MakeNamed};
 pub use named_derive::Named;
 pub use time::Time;
 pub use message_packet::{MessagePacket, MessagePacketProxy};
-pub use message_packet::{Outbox, OutboxSend};
+pub use outbox::{Outbox, OutboxSend};
 pub use scheduler::{Scheduler, SchedulerResult};
 //pub use enum_map::EnumMap;
 

@@ -41,6 +41,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
 
 
     let storage_type = quote::format_ident!("{}Storage", ident);
+    let storage_type_inner = quote::format_ident!("{}StorageInner", ident);
     let base = &named_enum.base[0];
 
     let mut from_patterns = Vec::new();
@@ -77,7 +78,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
                 where
                     'a: 'b
                 {
-                    &mut storage.#name
+                    &mut storage.inner.#name
                 }
             }
         });
@@ -103,12 +104,12 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
             }
         }
 
-        pub struct #storage_type {
+        struct #storage_type_inner {
             #(#storage_patterns)*
         }
 
-        impl actor_framework::AsBase<#ident> for #storage_type {
-            fn as_base(&self, id: #ident) -> & actor_framework::ActorBoxBase<#ident> {
+        impl #storage_type_inner {
+            fn base_ptr(&self, id: #ident) -> *mut actor_framework::ActorBoxBase<#ident> {
                 unsafe {
                     match id {
                         #(#ident::#varients => std::mem::transmute(&self.#varients),)*
@@ -117,10 +118,40 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
             }
         }
 
+        pub struct #storage_type {
+            inner: Box<#storage_type_inner>,
+            base_ptrs: [*mut actor_framework::ActorBoxBase<#ident>; #count]
+        }
+
+        impl actor_framework::AsBase<#ident> for #storage_type {
+            #[inline(always)]
+            fn as_base(&self, id: #ident) -> & actor_framework::ActorBoxBase<#ident> {
+                // Soooo....
+                // I was going to do this the safer way (see inner.base_ptr() above)
+                // But rust/llvm generated really shitty code (using a jump table to do the job of an array)
+                // So we get this this hack instead
+                let i: usize = id.into();
+                let ptr = self.base_ptrs[i];
+
+                unsafe {
+                    ptr.as_ref().unwrap_unchecked()
+                }
+            }
+        }
+
         impl Default for #storage_type {
             fn default() -> Self {
-                Self {
+                let inner = Box::new(#storage_type_inner {
                     #(#varients: Default::default(),)*
+                });
+                let base_ptrs = core::array::from_fn(|i| {
+                    let id: #ident = i.into();
+                    inner.base_ptr(id)
+                });
+
+                Self {
+                    inner,
+                    base_ptrs,
                 }
             }
         }
