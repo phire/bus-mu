@@ -4,8 +4,7 @@ use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWri
 pub struct RspActor {
     halted: bool,
     dma_busy: bool,
-    imem: Option<Box<[u32; 1024]>>,
-    dmem: Option<Box<[u32; 1024]>>,
+    dmem_imem: Option<Box<[u32; 2048]>>,
 }
 
 make_outbox!(
@@ -23,8 +22,7 @@ impl Default for RspActor {
             //         enter the halted state immediately on a soft reset.
             halted: true,
             dma_busy: false,
-            imem: Some(Box::new([0; 1024])),
-            dmem: Some(Box::new([0; 1024])),
+            dmem_imem: Some(Box::new([0; 2048])),
         }
     }
 }
@@ -155,14 +153,12 @@ impl Handler<N64Actors, CpuRegWrite> for RspActor {
 pub(super) struct ReqestMemOwnership {}
 
 pub(super) struct TransferMemOwnership {
-    pub imem: Box<[u32; 1024]>,
-    pub dmem: Box<[u32; 1024]>,
+    pub mem: Box<[u32; 2048]>,
 }
 
 impl Handler<N64Actors, TransferMemOwnership> for RspActor {
     fn recv(&mut self, _outbox: &mut RspOutbox, message: TransferMemOwnership, _time: Time, _limit: Time) -> SchedulerResult {
-        self.imem = Some(message.imem);
-        self.dmem = Some(message.dmem);
+        self.dmem_imem = Some(message.mem);
 
         // TODO: If the RSP is running, we need to continue it
         SchedulerResult::Ok
@@ -174,8 +170,7 @@ impl Handler<N64Actors, ReqestMemOwnership> for RspActor {
         // TODO: calculate timings for when RSP is busy
         // TODO: Handle cases where the RSP DMA is active (which apparently corrupts CPU accesses)
         outbox.send::<CpuActor>(TransferMemOwnership {
-            imem: self.imem.take().unwrap(),
-            dmem: self.dmem.take().unwrap(),
+            mem: self.dmem_imem.take().unwrap(),
         }, time);
 
         SchedulerResult::Ok

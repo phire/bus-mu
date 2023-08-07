@@ -32,6 +32,7 @@ where
 {
     type OutboxType;
 
+    #[inline(always)]
     fn message_delivered(&mut self, _outbox: &mut Self::OutboxType, _time: Time) { }
 }
 

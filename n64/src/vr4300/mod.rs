@@ -20,7 +20,7 @@ pub mod joint_tlb;
 pub mod regfile;
 
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RequestType {
     ICacheFill,
     DCacheFill,
