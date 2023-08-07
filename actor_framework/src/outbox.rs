@@ -1,4 +1,4 @@
-use crate::{MakeNamed, MessagePacketProxy, Handler, Actor, Time, Channel, MessagePacket};
+use crate::{MakeNamed, MessagePacketProxy, Handler, Actor, Time, Endpoint, MessagePacket};
 
 
 pub trait Outbox<ActorNames>
@@ -17,7 +17,7 @@ where
     fn send<Receiver>(&mut self, message: Message, time: Time)
     where
         Receiver: Handler<ActorNames, Message> + Actor<ActorNames>;
-    fn send_channel(&mut self, channel: Channel<ActorNames, Message>, message: Message, time: Time);
+    fn send_endpoint(&mut self, endpoint: Endpoint<ActorNames, Message>, message: Message, time: Time);
     fn cancel(&mut self) -> (Time, Message);
     fn as_packet<'a>(&'a mut self) -> Option<&'a mut MessagePacket<ActorNames, Message>>;
 }
@@ -138,12 +138,12 @@ macro_rules! make_outbox {
             //     self.send::<Receiver>(message, time);
             // }
 
-            fn send_channel(&mut self, channel: actor_framework::Channel<$name_type, $field_type>, message: $field_type, time: Time)
+            fn send_endpoint(&mut self, endpoint: actor_framework::Endpoint<$name_type, $field_type>, message: $field_type, time: Time)
             {
                 self.$field_ident = core::mem::ManuallyDrop::new(
-                        actor_framework::MessagePacket::from_channel::<
+                        actor_framework::MessagePacket::from_endpoint::<
                             <Self as actor_framework::Outbox<$name_type>>::Sender>
-                    (channel, time, message));
+                    (endpoint, time, message));
             }
 
             fn cancel(&mut self) -> (Time, $field_type)

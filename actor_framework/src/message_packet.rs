@@ -2,10 +2,10 @@
 
 use std::{mem::{MaybeUninit, ManuallyDrop}, any::TypeId};
 
-use crate::{object_map::{ObjectStore, ObjectStoreView}, MakeNamed, Time, Handler, Actor, Channel, SchedulerResult, OutboxSend};
+use crate::{object_map::{ObjectStore, ObjectStoreView}, MakeNamed, Time, Handler, Actor, Endpoint, SchedulerResult, OutboxSend};
 
 pub type ExecuteFn<ActorNames> = for<'a> fn(sender_id: ActorNames, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult;
-pub type ChannelFn<ActorNames, Message> =
+pub type EndpointFn<ActorNames, Message> =
     for<'a> fn(
         packet_view: ObjectStoreView<'a, ActorNames, MessagePacket<ActorNames, Message>>,
         limit: Time)
@@ -33,7 +33,7 @@ where
     pub(crate) execute_fn: ExecuteFn<ActorNames>,
     msg_type: std::any::TypeId,
 
-    channel_fn: ChannelFn<ActorNames, Message>,
+    endpoint_fn: EndpointFn<ActorNames, Message>,
     data: MaybeUninit<ManuallyDrop<Message>>,
 }
 
@@ -62,7 +62,7 @@ where
     result
 }
 
-pub(super) fn receive_for_channel<ActorNames, Receiver, Message>(
+pub(super) fn receive_for_endpoint<ActorNames, Receiver, Message>(
     mut packet_view: ObjectStoreView<'_, ActorNames, MessagePacket<ActorNames, Message>>,
     limit: Time
 ) -> SchedulerResult
@@ -76,7 +76,7 @@ where
     receiver.actor.recv(&mut receiver.outbox, message, time, limit)
 }
 
-fn channel_execute<'a, ActorNames, Sender, Message>(_: ActorNames, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
+fn endpoint_execute<'a, ActorNames, Sender, Message>(_: ActorNames, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
 where
     ActorNames: MakeNamed,
     Message: 'static,
@@ -89,10 +89,10 @@ where
             unsafe { packet.unwrap_unchecked() }
         }
     );
-    let (channel_fn, time) =
-        packet_view.run(|p| (p.channel_fn.clone(), p.time.clone()));
+    let (endpoint_fn, time) =
+        packet_view.run(|p| (p.endpoint_fn.clone(), p.time.clone()));
 
-    let result = (channel_fn)(packet_view, limit);
+    let result = (endpoint_fn)(packet_view, limit);
 
     let actor = map.get::<Sender>();
     actor.actor.message_delivered(&mut actor.outbox, time);
@@ -151,12 +151,12 @@ where
             //         template here. It relies on this function for type checking
             execute_fn: direct_execute::<ActorNames, Sender, Receiver, Message>,
             msg_type: TypeId::of::<Message>(),
-            channel_fn: null_channel::<ActorNames, Message>,
+            endpoint_fn: null_channel::<ActorNames, Message>,
             data: MaybeUninit::new(ManuallyDrop::new(data)),
         }
     }
 
-    pub fn from_channel<Sender>(channel: Channel<ActorNames, Message>, time: Time, data: Message) -> Self
+    pub fn from_endpoint<Sender>(endpoint: Endpoint<ActorNames, Message>, time: Time, data: Message) -> Self
     where
         Sender: Actor<ActorNames>,
         <Sender as Actor<ActorNames>>::OutboxType: OutboxSend<ActorNames, Message>,
@@ -165,9 +165,9 @@ where
             time,
             // Safety: It is essential that we instantiate the correct execute_fn
             //         template here. It relies on this function for type checking
-            execute_fn: channel_execute::<ActorNames, Sender, Message>,
+            execute_fn: endpoint_execute::<ActorNames, Sender, Message>,
             msg_type: TypeId::of::<Message>(),
-            channel_fn: channel.channel_fn,
+            endpoint_fn: endpoint.endpoint_fn,
             data: MaybeUninit::new(ManuallyDrop::new(data)),
         }
     }
@@ -211,7 +211,7 @@ where
             time: Time::MAX,
             execute_fn: null_execute::<ActorNames>,
             msg_type: TypeId::of::<()>(),
-            channel_fn: null_channel::<ActorNames, ()>,
+            endpoint_fn: null_channel::<ActorNames, ()>,
             data: MaybeUninit::new(ManuallyDrop::new(())),
         }
     }

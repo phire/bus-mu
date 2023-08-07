@@ -29,7 +29,7 @@ make_outbox!(
 pub struct BusAccept {}
 
 pub struct BusRequest {
-    channel: Channel<N64Actors, BusAccept>,
+    channel: Endpoint<N64Actors, BusAccept>,
     piority: u16,
     count: u16,
 }
@@ -88,7 +88,7 @@ impl Handler<N64Actors, BusRequest> for BusActor {
         if self.queue.is_empty() && self.commited_time < time {
             // There are no outstanding requests, so we can just accept this one
             self.commited_time = time;
-            outbox.send_channel(message.channel.clone(), BusAccept { }, time.add(1));
+            outbox.send_endpoint(message.channel.clone(), BusAccept { }, time.add(1));
             self.queue.push(message);
         } else {
             let new_piority = message.piority;
@@ -104,7 +104,7 @@ impl Handler<N64Actors, BusRequest> for BusActor {
                 if highest.piority == new_piority {
                     let channel = highest.channel.clone();
                     // This request takes priority
-                    outbox.send_channel(channel, BusAccept { }, time.add(1));
+                    outbox.send_endpoint(channel, BusAccept { }, time.add(1));
                 }
             }
         }
@@ -126,7 +126,7 @@ impl Actor<N64Actors> for BusActor {
             let channel = request.channel.clone();
             let accept_time = self.commited_time.add(1);
 
-            outbox.send_channel(channel, BusAccept { }, accept_time);
+            outbox.send_endpoint(channel, BusAccept { }, accept_time);
         }
     }
 }
