@@ -29,9 +29,25 @@ where
 {
     type OutboxType;
 
-    fn init(&mut self, _outbox: &mut Self::OutboxType, _time: Time) {  }
     fn message_delivered(&mut self, _outbox: &mut Self::OutboxType, _time: Time) { }
 }
+
+pub trait ActorCreate<ActorNames> : Actor<ActorNames>
+where
+    ActorNames: MakeNamed,
+    Self::OutboxType: Outbox<ActorNames>,
+{
+    fn new(outbox: &mut Self::OutboxType, time: Time) -> Self;
+}
+
+impl<ActorNames, T> ActorCreate<ActorNames> for T
+ where ActorNames: MakeNamed,
+       T: Actor<ActorNames> + Default,
+ {
+    fn new(_outbox: &mut Self::OutboxType, _time: Time) -> T {
+        T::default()
+    }
+ }
 
 pub trait Handler<ActorNames, M> : Actor<ActorNames>
 where

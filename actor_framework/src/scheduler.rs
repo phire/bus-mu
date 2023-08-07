@@ -29,9 +29,8 @@ ActorNames: MakeNamed,
     <ActorNames as MakeNamed>::StorageType: Default + AsBase<ActorNames>,
  {
     pub fn new() -> Scheduler<ActorNames> {
-        let actors = ObjectStore::new();
         Scheduler {
-            actors,
+            actors: ObjectStore::new(),
             count: 0,
             zero_limit_count: 0,
         }

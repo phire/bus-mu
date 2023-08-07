@@ -30,8 +30,6 @@ where
         }
     }
 
-    //fn make(id: Self) -> Pin<Box<Self::Base>>;
-
     fn size_of(id: Self) -> usize;
 }
 

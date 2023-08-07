@@ -2,7 +2,7 @@
 
 /// CpuActor: Emulates the CPU and MI (Mips Interface)
 
-use actor_framework::{Actor, Time, Handler,  OutboxSend, SchedulerResult};
+use actor_framework::{Actor, Time, Handler,  OutboxSend, SchedulerResult, ActorCreate};
 use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor, pi_actor::{PiActor, self}, vi_actor::ViActor, ai_actor::AiActor, rdp_actor::RdpActor};
 
 use crate::{vr4300::{self}, actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::{RspActor, self}}};
@@ -49,21 +49,6 @@ fn to_bus_time(cpu_time: u64, odd: u64) -> u64 {
     // CPU has a 1.5x clock multiplier
     // TODO: Check if the logic for odd is anywhere near correct
     cpu_time - ((cpu_time + odd * 2) / 3u64)
-}
-
-impl Default for CpuActor {
-    fn default() -> Self {
-        CpuActor {
-            committed_time: Default::default(),
-            _cpu_overrun: 0,
-            cpu_core: Default::default(),
-            imem: None,
-            dmem: None,
-            outstanding_mem_request: None,
-            bus_free: Default::default(),
-            recursion: 0,
-        }
-    }
 }
 
 enum AdvanceResult {
@@ -190,12 +175,24 @@ impl CpuActor {
 impl Actor<N64Actors> for CpuActor {
     type OutboxType = CpuOutbox;
 
-    fn init(&mut self, outbox: &mut CpuOutbox, time: Time) {
-        outbox.send::<CpuActor>(CpuRun {}, time);
-    }
-
     fn message_delivered(&mut self, _outbox: &mut CpuOutbox, _time: Time) {
         self.recursion = 0;
+    }
+}
+
+impl ActorCreate<N64Actors> for CpuActor {
+    fn new(outbox: &mut CpuOutbox, time: Time) -> CpuActor {
+        outbox.send::<CpuActor>(CpuRun {}, time);
+        CpuActor {
+            committed_time: Default::default(),
+            _cpu_overrun: 0,
+            cpu_core: Default::default(),
+            imem: None,
+            dmem: None,
+            outstanding_mem_request: None,
+            bus_free: Default::default(),
+            recursion: 0,
+        }
     }
 }
 

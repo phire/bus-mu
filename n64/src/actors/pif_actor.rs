@@ -2,7 +2,7 @@
 /// PifActor: Emulates the SI (Serial Interface) and the connected PIF
 
 
-use actor_framework::{Actor, Time, Handler, make_outbox, OutboxSend, SchedulerResult};
+use actor_framework::{Actor, Time, Handler, make_outbox, OutboxSend, SchedulerResult, ActorCreate};
 use super::{N64Actors, si_actor::{SiPacket, SiActor}};
 
 use crate::{pif, cic};
@@ -25,8 +25,19 @@ make_outbox!(
     }
 );
 
-impl Default for PifActor {
-    fn default() -> Self {
+impl Actor<N64Actors> for PifActor {
+    type OutboxType = PifOutbox;
+
+    fn message_delivered(&mut self, outbox: &mut PifOutbox, _: Time) {
+        let time = self.pif_time;
+        outbox.send::<Self>(PifHleMain{}, time);
+    }
+}
+
+impl ActorCreate<N64Actors> for PifActor {
+    fn new(outbox: &mut Self::OutboxType, time: Time) -> Self {
+        outbox.send::<Self>(PifHleMain{}, time);
+
         let pif_rom = std::fs::read("pifdata.bin").expect("Error reading PIF Rom from pifdata.bin");
         let pif_mem: [u32; 512] = pif_rom
             .chunks_exact(4)
@@ -45,19 +56,6 @@ impl Default for PifActor {
             pif_time: 0.into(),
             cic_core: cic::CicHle::new(cic::CIC::Nus6102),
         }
-    }
-}
-
-impl Actor<N64Actors> for PifActor {
-    type OutboxType = PifOutbox;
-
-    fn init(&mut self, outbox: &mut PifOutbox, time: Time) {
-        outbox.send::<Self>(PifHleMain{}, time);
-    }
-
-    fn message_delivered(&mut self, outbox: &mut PifOutbox, _: Time) {
-        let time = self.pif_time;
-        outbox.send::<Self>(PifHleMain{}, time);
     }
 }
 
