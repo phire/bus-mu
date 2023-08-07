@@ -6,7 +6,6 @@ use super::N64Actors;
 /// This actor represents RCP's internal bus and handles all bus arbitration
 /// For now, we do it all synchronously, so this is going to be a huge bottleneck
 pub struct BusActor {
-    outbox: BusOutbox,
     queue: BinaryHeap<BusRequest>,
     commited_time: Time,
 }
@@ -14,7 +13,6 @@ pub struct BusActor {
 impl Default for BusActor {
     fn default() -> Self {
         Self {
-            outbox: Default::default(),
             queue: BinaryHeap::new(),
             commited_time: Time::default(),
         }
@@ -52,7 +50,10 @@ const fn piority(actor: N64Actors) -> u16 {
 
 impl BusRequest {
     /// Limitations: There can only be one outstanding bus request per actor
-    pub fn new<A>(count: u16) -> Self where A: Actor<N64Actors> + Handler<BusAccept> + 'static {
+    pub fn new<A>(count: u16) -> Self
+    where
+        A: for<'a, 'b> actor_framework::Receiver<'a, 'b, N64Actors, BusAccept>,
+    {
         let addr = Addr::<A, N64Actors>::default();
         Self {
             channel: addr.make_channel::<BusAccept>(),
@@ -82,12 +83,12 @@ impl Ord for BusRequest {
     }
 }
 
-impl Handler<BusRequest> for BusActor {
-    fn recv(&mut self, message: BusRequest, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, BusRequest> for BusActor {
+    fn recv(&mut self, outbox: &mut BusOutbox, message: BusRequest, time: Time, _limit: Time) -> SchedulerResult {
         if self.queue.is_empty() && self.commited_time < time {
             // There are no outstanding requests, so we can just accept this one
             self.commited_time = time;
-            self.outbox.send_channel(message.channel.clone(), BusAccept { }, time.add(1));
+            outbox.send_channel(message.channel.clone(), BusAccept { }, time.add(1));
             self.queue.push(message);
         } else {
             let new_piority = message.piority;
@@ -103,7 +104,7 @@ impl Handler<BusRequest> for BusActor {
                 if highest.piority == new_piority {
                     let channel = highest.channel.clone();
                     // This request takes priority
-                    self.outbox.send_channel(channel, BusAccept { }, time.add(1));
+                    outbox.send_channel(channel, BusAccept { }, time.add(1));
                 }
             }
         }
@@ -112,11 +113,9 @@ impl Handler<BusRequest> for BusActor {
 }
 
 impl Actor<N64Actors> for BusActor {
-    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut MessagePacketProxy<N64Actors>> {
-        unsafe { self.map_unchecked_mut(|s| s.outbox.as_mut()) }
-    }
+    type OutboxType = BusOutbox;
 
-    fn message_delivered(mut self: Pin<&mut Self>, _time: Time) {
+    fn message_delivered(&mut self, outbox: &mut BusOutbox, _time: Time) {
         let request = self.queue.pop().unwrap();
         // Increment time to end of delivered request
         self.commited_time = self.commited_time.add(request.count.into());
@@ -127,7 +126,7 @@ impl Actor<N64Actors> for BusActor {
             let channel = request.channel.clone();
             let accept_time = self.commited_time.add(1);
 
-            self.outbox.send_channel(channel, BusAccept { }, accept_time);
+            outbox.send_channel(channel, BusAccept { }, accept_time);
         }
     }
 }

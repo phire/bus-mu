@@ -1,21 +1,22 @@
 
 
-use std::{mem::{MaybeUninit, ManuallyDrop}, any::TypeId, pin::{Pin, pin}};
+use std::{mem::{MaybeUninit, ManuallyDrop}, any::TypeId};
 
-use crate::{object_map::ObjectStore, MakeNamed, Time, Handler, Actor, Addr, Channel, SchedulerResult};
+use crate::{object_map::ObjectStore, MakeNamed, Time, Handler, Actor, Addr, Channel, SchedulerResult, ActorBox};
 
-type ExecuteFn<ActorNames> = fn(sender_id: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult;
+pub type ExecuteFn<'a, ActorNames> = fn(sender_id: ActorNames, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult;
+pub type ChannelFn<'a, ActorNames, Message> = fn(packet: &'a mut MessagePacket<ActorNames, Message>, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult;
 
 #[derive(Debug)]
 #[repr(C)]
 pub struct MessagePacketProxy<ActorNames>
 where
     ActorNames: MakeNamed,
-    [(); ActorNames::COUNT]: ,
+    //[(); ActorNames::COUNT]: ,
 {
 
     pub time: Time,
-    pub(crate) execute_fn: ExecuteFn<ActorNames>,
+    pub(crate) execute_fn: for<'a> fn(sender_id: ActorNames, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult,
     msg_type: TypeId,
 }
 
@@ -23,86 +24,105 @@ where
 pub struct MessagePacket<ActorNames, Message>
 where
     ActorNames: MakeNamed,
-    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-    [(); ActorNames::COUNT]: ,
+    //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
     Message: 'static,
 {
     pub time: Time,
-    pub(crate) execute_fn: ExecuteFn<ActorNames>,
+    pub(crate) execute_fn: ExecuteFn<'static, ActorNames>,
     msg_type: std::any::TypeId,
+    channel_fn: ChannelFn<'static, ActorNames, Message>,
     //actor_name: ActorNames,
     data: MaybeUninit<ManuallyDrop<Message>>,
 }
 
-fn direct_execute<ActorNames, Sender, Receiver, Message>(_: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
+fn direct_execute<'a, 'b, 'c, 'd, ActorNames, Sender, Receiver, Message>(_: ActorNames, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
 where
-    Message: 'static,
-    Receiver: Handler<Message> + Actor<ActorNames>,
-    Sender: crate::Actor<ActorNames>,
     ActorNames: MakeNamed,
-    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-    [(); ActorNames::COUNT]: ,
+    Message: 'static,
+    'a: 'b + 'd,
+    Receiver: for <'e, 'f> crate::Receiver<'e, 'f, ActorNames, Message> + 'd,
+    Sender: crate::Sender<ActorNames, Message> + 'b,
+    &'b mut ActorBox<ActorNames, Sender>: for<'n> From<&'n mut <ActorNames as MakeNamed>::StorageType>,
+    &'d mut ActorBox<ActorNames, Receiver>: for<'n> From<&'n mut <ActorNames as MakeNamed>::StorageType>,
 {
-    let proxy = map.get::<Sender>().get_message();
+    let (time, message) = {
+        let packet: Option<&'b mut MessagePacket<ActorNames, Message>> = Sender::as_mut(map);
 
-    // Safety: this was type checked at compile type in MessagePacket::new
-    let (time, message) = unsafe {
-        let packet : &mut MessagePacket<ActorNames, Message> = std::mem::transmute(proxy);
-        packet.take()
+        // Safety: Type checked in MessagePacket::new
+         unsafe { packet.unwrap_unchecked().take() }
     };
 
-    let receiver = unsafe {
-        map.get::<Receiver>().get_unchecked_mut()
-    };
+    let result = Receiver::receive(map, message, time, limit);
 
-    //println!("direct_execute: {:?} {:?}", Receiver::name(), time);
-
-    let result = receiver.recv(message, time, limit);
-    map.get::<Sender>().message_delivered(time);
-
+    //Sender::delivered(map, time);
     result
 }
 
-fn channel_execute<ActorNames, Receiver, Message>(sender_id: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
+fn new_channel_execute<'a, 'b, ActorNames, Sender, Message>(sender_id: ActorNames, map: &'a mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
 where
-    Message: 'static,
-    Receiver: Handler<Message> + Actor<ActorNames>,
     ActorNames: MakeNamed,
-    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-    [(); ActorNames::COUNT]: ,
+    Message: 'static,
+    Sender: crate::Sender<ActorNames, Message>,
+    'a: 'b,
 {
-    let proxy = map.get_id(sender_id).get_message();
+    // let packet = Sender::as_mut(map);
 
-    // Safety: this was type checked at compile type in MessagePacket::new
-    let (time, message) = unsafe {
-        let packet : &mut MessagePacket<ActorNames, Message> = std::mem::transmute(proxy);
-        packet.take()
-    };
+    // // Safety: Typechecked in MessagePacket::new_channel
+    // let packet = unsafe { packet.unwrap_unchecked() };
 
-    let receiver = unsafe {
-        map.get::<Receiver>().get_unchecked_mut()
-    };
+    // let time = packet.time.clone();
+    // let result = (packet.channel_fn)(packet, map, limit);
 
-    let result = receiver.recv(message, time, limit);
-    map.get_id(sender_id).message_delivered(time);
+    // Sender::delivered(map, time);
 
-    result
+    //result
+    unimplemented!("new_channel_execute");
 }
+
+// fn channel_execute<'b, ActorNames, Receiver, Message>(sender_id: ActorNames, map: &mut ObjectStore<ActorNames>, limit: Time) -> SchedulerResult
+// where
+//     Message: 'static,
+//     Receiver: Handler<ActorNames, Message> + Actor<ActorNames> + 'b,
+//     &'b mut ActorBox<ActorNames, Receiver>: From<<ActorNames as MakeNamed>::StorageType>,
+//     ActorNames: MakeNamed,
+//     <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
+// {
+//     let sender = map.get_id(sender_id);
+//     let (time, message) = unsafe {
+//         let message: MessagePacket<ActorNames, Message> = std::mem::transmute(sender.outbox);
+//         // Safety: this was type checked at compile type in MessagePacket::new
+//         message.take()
+//     };
+
+//     let receiver = map.get::<Receiver>();
+
+//     let result = receiver.actor.recv(&mut receiver.outbox, message, time, limit);
+//     map.get_id(sender_id).message_delivered(time);
+
+//     result
+// }
 
 fn null_execute<ActorNames>(_: ActorNames, _: &mut ObjectStore<ActorNames>, _: Time) -> SchedulerResult
 where
     ActorNames: MakeNamed,
-    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-    [(); ActorNames::COUNT]: ,
+    //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
 {
     panic!("Scheduler tried to execute an empty message");
+}
+
+fn null_channel<ActorNames, Message>(_packet: &mut MessagePacket<ActorNames, Message>, _: &mut ObjectStore<ActorNames>, _: Time) -> SchedulerResult
+where
+    ActorNames: MakeNamed,
+    //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
+{
+    unreachable!()
 }
 
 impl<ActorNames> MessagePacketProxy<ActorNames>
 where
     ActorNames: MakeNamed,
-    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-    [(); ActorNames::COUNT]: ,
+    //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
+    //[(); ActorNames::COUNT]: ,
 {
     pub fn is_some(&self) -> bool {
         self.execute_fn != null_execute::<ActorNames>
@@ -115,8 +135,7 @@ where
 impl<ActorNames, Message> MessagePacket<ActorNames, Message>
 where
     ActorNames: MakeNamed,
-    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-    [(); ActorNames::COUNT]: ,
+    //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
 {
     pub fn is_some(&self) -> bool {
         self.execute_fn != null_execute::<ActorNames>
@@ -126,10 +145,12 @@ where
         self.msg_type
     }
 
-    pub fn new<Sender, Receiver>(time: Time, data: Message) -> Self
+    pub fn new<'a, 'b, Sender, Receiver>(time: Time, data: Message) -> Self
     where
-        Receiver: Handler<Message> + Actor<ActorNames>,
-        Sender: crate::Actor<ActorNames>,
+        Receiver: for<'c, 'd> crate::Receiver<'c, 'd, ActorNames, Message> + 'b,
+        Sender: crate::Sender<ActorNames, Message> + 'b,
+        &'b mut ActorBox<ActorNames, Sender>: for<'n> From<&'n mut <ActorNames as MakeNamed>::StorageType>,
+        &'b mut ActorBox<ActorNames, Receiver>: for<'n> From<&'n mut <ActorNames as MakeNamed>::StorageType>,
         Message: 'static,
     {
         Self {
@@ -138,27 +159,29 @@ where
             //         template here. It relies on this function for type checking
             execute_fn: direct_execute::<ActorNames, Sender, Receiver, Message>,
             msg_type: TypeId::of::<Message>(),
+            channel_fn: null_channel::<ActorNames, Message>,
             data: MaybeUninit::new(ManuallyDrop::new(data)),
         }
     }
 
-    pub(crate) fn new_channel<Receiver>(time: Time, data: Message) -> Self
+    pub fn new_channel<Sender>(channel: Channel<Message, ActorNames>, time: Time, data: Message) -> Self
     where
-        Receiver: Handler<Message> + Actor<ActorNames>,
-        <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-        Message: 'static,
+        Sender: crate::Sender<ActorNames, Message>,
+        //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
+        //Message: 'static,
     {
         Self {
             time,
             // Safety: It is essential that we instantiate the correct execute_fn
             //         template here. It relies on this function for type checking
-            execute_fn: channel_execute::<ActorNames, Receiver, Message>,
+            execute_fn: new_channel_execute::<ActorNames, Sender, Message>,
             msg_type: TypeId::of::<Message>(),
+            channel_fn: channel.channel_fn,
             data: MaybeUninit::new(ManuallyDrop::new(data)),
         }
     }
 
-    pub unsafe fn take(&mut self) -> (Time, Message) {
+    pub unsafe fn take<'b>(&'b mut self) -> (Time, Message) {
         //debug_assert!(self.execute_fn.is_some());
         debug_assert!(self.msg_type == TypeId::of::<Message>());
 
@@ -174,12 +197,12 @@ where
     }
 }
 
-impl<ActorNames, Message> Drop for MessagePacket<ActorNames, Message>
+impl<'a, ActorNames, Message> Drop for MessagePacket<ActorNames, Message>
 where
     Message: 'static,
     ActorNames: MakeNamed,
-    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-    [(); ActorNames::COUNT]: ,
+    //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
+    //[(); ActorNames::COUNT]: ,
 {
     fn drop(&mut self) {
         assert!(self.msg_type == TypeId::of::<Message>());
@@ -193,14 +216,15 @@ where
 impl<ActorNames> Default for MessagePacket<ActorNames, ()>
 where
     ActorNames: MakeNamed,
-    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-    [(); ActorNames::COUNT]: ,
+    //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
+    //[(); ActorNames::COUNT]: ,
 {
     fn default() -> Self {
         Self {
             time: Time::MAX,
             execute_fn: null_execute::<ActorNames>,
             msg_type: TypeId::of::<()>(),
+            channel_fn: null_channel::<ActorNames, ()>,
             data: MaybeUninit::new(ManuallyDrop::new(())),
         }
     }
@@ -209,7 +233,7 @@ where
 pub trait Outbox<ActorNames>
 where
     ActorNames: MakeNamed,
-    [(); ActorNames::COUNT]: ,
+    //[(); ActorNames::COUNT]: ,
 {
     type Sender;
     fn as_mut(&mut self) -> &mut MessagePacketProxy<ActorNames>;
@@ -219,17 +243,20 @@ where
 pub trait OutboxSend<ActorNames, Message>
 where
     ActorNames: MakeNamed,
-    <ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-    [(); ActorNames::COUNT]: ,
+    //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
 {
-    fn send<Receiver>(&mut self, message: Message, time: Time)
+    fn send<'a, Receiver>(&mut self, message: Message, time: Time)
     where
-        Receiver: Handler<Message> + Actor<ActorNames>;
-    fn send_addr<Receiver>(&mut self, addr: &Addr<Receiver, ActorNames>, message: Message, time: Time)
-    where
-        Receiver: Handler<Message> + Actor<ActorNames>;
+        //Receiver: Handler<ActorNames, Message> + Actor<ActorNames>;
+        Receiver: for<'c, 's> crate::Receiver<'c, 's, ActorNames, Message> + 'a,
+        &'a mut ActorBox<ActorNames, Receiver>: for<'n> From<&'n mut <ActorNames as MakeNamed>::StorageType>,
+        ;
+    // fn send_addr<Receiver>(&mut self, addr: &Addr<Receiver, ActorNames>, message: Message, time: Time)
+    // where
+    //     Receiver: Handler<ActorNames, Message> + Actor<ActorNames>;
     fn send_channel(&mut self, channel: Channel<Message, ActorNames>, message: Message, time: Time);
     fn cancel(&mut self) -> (Time, Message);
+    fn as_packet<'a>(&'a mut self) -> Option<&'a mut MessagePacket<ActorNames, Message>>;
 }
 
 #[macro_export]
@@ -294,7 +321,7 @@ macro_rules! make_outbox {
         impl<ActorNames> actor_framework::Outbox<ActorNames> for $name
         where
             ActorNames: actor_framework::MakeNamed,
-            [(); ActorNames::COUNT]: ,
+            //[(); ActorNames::COUNT]: ,
         {
             type Sender = $sender;
             fn as_mut(&mut self) -> &mut actor_framework::MessagePacketProxy<ActorNames> {
@@ -329,11 +356,12 @@ macro_rules! make_outbox {
         impl actor_framework::OutboxSend<$name_type, $field_type> for $name
         where
             $name_type: actor_framework::MakeNamed,
-            [(); <$name_type as actor_framework::MakeNamed>::COUNT]: ,
+            //[(); <$name_type as actor_framework::MakeNamed>::COUNT]: ,
         {
-            fn send<Receiver>(&mut self, message: $field_type, time: Time)
+            fn send<'a, Receiver>(&mut self, message: $field_type, time: Time)
             where
-                Receiver: actor_framework::Handler<$field_type> + actor_framework::Actor<$name_type>,
+                Receiver: for<'c, 'd> actor_framework::Receiver<'c, 'd, $name_type, $field_type> + 'a,
+                &'a mut actor_framework::ActorBox<$name_type, Receiver>: for<'n> From<&'n mut <$name_type as actor_framework::MakeNamed>::StorageType>,
             {
                 assert!(self.is_empty());
 
@@ -342,16 +370,19 @@ macro_rules! make_outbox {
                     Receiver>(time, message));
             }
 
-            fn send_addr<Receiver>(&mut self, addr: &actor_framework::Addr<Receiver, $name_type>, message: $field_type, time: Time)
-            where
-                Receiver: actor_framework::Handler<$field_type> + actor_framework::Actor<$name_type>,
-            {
-                self.send::<Receiver>(message, time);
-            }
+            // fn send_addr<Receiver>(&mut self, addr: &actor_framework::Addr<Receiver, $name_type>, message: $field_type, time: Time)
+            // where
+            //     Receiver: actor_framework::Handler<$name_type, $field_type> + actor_framework::Actor<$name_type>,
+            // {
+            //     self.send::<Receiver>(message, time);
+            // }
 
             fn send_channel(&mut self, channel: actor_framework::Channel<$field_type, $name_type>, message: $field_type, time: Time)
             {
-                self.$field_ident = core::mem::ManuallyDrop::new(channel.send(message, time));
+                self.$field_ident = core::mem::ManuallyDrop::new(
+                        actor_framework::MessagePacket::new_channel::<
+                            <Self as actor_framework::Outbox<$name_type>>::Sender>
+                    (channel, time, message));
             }
 
             fn cancel(&mut self) -> (Time, $field_type)
@@ -364,6 +395,16 @@ macro_rules! make_outbox {
                 } else {
                     let typename = std::any::type_name::<$field_type>();
                     panic!("Outbox::cancel - Expected {} but found {:?}", typename, msg_type);
+                }
+            }
+            fn as_packet<'a>(&'a mut self) -> Option<&'a mut actor_framework::MessagePacket<$name_type, $field_type>> {
+                let msg_type = unsafe { self.none.msg_type() };
+                if msg_type == std::any::TypeId::of::<$field_type>() {
+                    unsafe {
+                        return Some(&mut self.$field_ident);
+                    }
+                } else {
+                    return None;
                 }
             }
         }

@@ -43,11 +43,9 @@ actor_framework::make_outbox!(
 );
 
 impl Actor<N64Actors> for SiActor {
-    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut MessagePacketProxy<N64Actors>> {
-        unsafe { self.map_unchecked_mut(|s| s.outbox.as_mut()) }
-    }
+    type OutboxType = SiOutbox;
 
-    fn message_delivered(mut self: Pin<&mut Self>, time: Time) {
+    fn message_delivered(&mut self, outbox: &mut SiOutbox, time: Time) {
         if let Some((msg_time, message)) = self.queued_message.take() {
             println!("Si: sending queued message {:?} to time {} at {}", message, u64::from(msg_time), time);
             self.outbox.send::<PifActor>(message, msg_time);
@@ -78,8 +76,8 @@ impl SiActor {
     }
 }
 
-impl Handler<CpuRegRead> for SiActor {
-    fn recv(&mut self, message: CpuRegRead, time: Time, _: Time) -> SchedulerResult {
+impl Handler<N64Actors, CpuRegRead> for SiActor {
+    fn recv(&mut self, outbox: &mut SiOutbox, message: CpuRegRead, time: Time, _: Time) -> SchedulerResult {
         let address = message.address;
         match address {
             0x0480_0000..=0x048f_ffff => {
@@ -163,8 +161,8 @@ impl Handler<CpuRegRead> for SiActor {
     }
 }
 
-impl Handler<CpuRegWrite> for SiActor {
-    fn recv(&mut self, message: CpuRegWrite, time: Time, _: Time) -> SchedulerResult {
+impl Handler<N64Actors, CpuRegWrite> for SiActor {
+    fn recv(&mut self, outbox: &mut SiOutbox, message: CpuRegWrite, time: Time, _: Time) -> SchedulerResult {
         match self.state {
             SiState::Idle => {}
             _ => panic!("SI is busy")
@@ -246,8 +244,8 @@ pub enum SiPacket {
 }
 
 // Handle responses from PIF
-impl Handler<SiPacket> for SiActor {
-    fn recv(&mut self, message: SiPacket, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, SiPacket> for SiActor {
+    fn recv(&mut self, outbox: &mut SiOutbox, message: SiPacket, time: Time, _limit: Time) -> SchedulerResult {
         let req_time;
         match message {
             SiPacket::Ack => { // PIF ready to receive our write data
@@ -306,8 +304,8 @@ enum SiState {
     WaitAck,
 }
 
-impl Handler<BusAccept> for SiActor {
-    fn recv(&mut self, _: BusAccept, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, BusAccept> for SiActor {
+    fn recv(&mut self, outbox: &mut SiOutbox, _: BusAccept, time: Time, _limit: Time) -> SchedulerResult {
         //let time = time.add(4 * 32);
         self.state = match self.state {
             SiState::CpuRead => {

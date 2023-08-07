@@ -2,16 +2,27 @@
 
 use std::{marker::PhantomData, pin::Pin};
 
+use crate::{ActorBox, Actor};
+
 pub trait Named<E> {
     fn name() -> E where Self: Sized;
     fn dyn_name(&self) -> E;
+    fn from_storage<'a, 'b>(storage: &'a mut E::StorageType) -> &'b mut ActorBox<E, Self>
+    where
+        'a: 'b,
+        E: MakeNamed,
+        Self: Actor<E> + Sized;
 }
 
 pub trait MakeNamed : From<usize> + Into<usize> + PartialEq + Copy + 'static + std::fmt::Debug
+where
+    Self::StorageType: Default,
 {
     const COUNT: usize;
-    type Base : Named<Self> + ?Sized;
+    type Base<A> where A: Actor<Self>, Self: Sized;
     type ExitReason = Box<dyn std::error::Error>;
+    type StorageType;
+
     fn iter() -> NamedIterator<Self> where Self: Sized, Self: From<usize> {
         NamedIterator {
             pos: 0,
@@ -19,7 +30,7 @@ pub trait MakeNamed : From<usize> + Into<usize> + PartialEq + Copy + 'static + s
         }
     }
 
-    fn make(id: Self) -> Pin<Box<Self::Base>>;
+    //fn make(id: Self) -> Pin<Box<Self::Base>>;
 
     fn size_of(id: Self) -> usize;
 }
@@ -43,3 +54,4 @@ impl<E> Iterator for NamedIterator<E> where E: MakeNamed {
         }
     }
 }
+

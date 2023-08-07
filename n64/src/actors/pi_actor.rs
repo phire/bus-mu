@@ -5,7 +5,6 @@ use actor_framework::*;
 use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite, WriteFinished}};
 
 pub struct PiActor {
-    outbox: PiOutbox,
     dram_addr: u32,
     cart_addr: u32,
     domains: [PiDomain; 2],
@@ -30,7 +29,6 @@ impl Default for PiActor {
         println!("Loaded rom with {} bytes", rom.len() * 2);
 
         Self {
-            outbox: Default::default(),
             dram_addr: 0,
             cart_addr: 0,
             domains: Default::default(),
@@ -50,17 +48,11 @@ impl PiActor {
 }
 
 impl Actor<N64Actors> for PiActor {
-    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut MessagePacketProxy<N64Actors>> {
-        unsafe { self.map_unchecked_mut(|s| s.outbox.as_mut()) }
-    }
-
-    fn message_delivered(self: Pin<&mut Self>, _time: Time) {
-        // do nothing
-    }
+    type OutboxType = PiOutbox;
 }
 
-impl Handler<CpuRegWrite> for PiActor {
-    fn recv(&mut self, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CpuRegWrite> for PiActor {
+    fn recv(&mut self, outbox: &mut PiOutbox, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
         let data = message.data;
         let n = (message.address >> 3) as usize & 1;
         match message.address & 0x3c {
@@ -108,14 +100,14 @@ impl Handler<CpuRegWrite> for PiActor {
             }
             _ => unreachable!(),
         }
-        self.outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
+        outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
 
         SchedulerResult::Ok
     }
 }
 
-impl Handler<CpuRegRead> for PiActor {
-    fn recv(&mut self, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CpuRegRead> for PiActor {
+    fn recv(&mut self, outbox: &mut PiOutbox, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
         let n = (message.address >> 3) as usize & 1;
         let data = match message.address & 0x3c {
             0x00 => { // PI_DRAM_ADDR
@@ -161,14 +153,14 @@ impl Handler<CpuRegRead> for PiActor {
             }
             _ => unreachable!(),
         };
-        self.outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
+        outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
 
         SchedulerResult::Ok
     }
 }
 
-impl Handler<PiRead> for PiActor {
-    fn recv(&mut self, message: PiRead, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, PiRead> for PiActor {
+    fn recv(&mut self, outbox: &mut PiOutbox, message: PiRead, time: Time, _limit: Time) -> SchedulerResult {
         if message.cart_addr & 0x3 != 0 {
             panic!("unaligned PI read {:#010x}", message.cart_addr)
         }
@@ -201,14 +193,14 @@ impl Handler<PiRead> for PiActor {
 
         let cycles = domain.calc_cycles(addr, 2);
 
-        self.outbox.send::<CpuActor>(ReadFinished::word(data), time.add(cycles));
+        outbox.send::<CpuActor>(ReadFinished::word(data), time.add(cycles));
 
         SchedulerResult::Ok
     }
 }
 
-impl Handler<PiWrite> for PiActor {
-    fn recv(&mut self, message: PiWrite, _time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, PiWrite> for PiActor {
+    fn recv(&mut self, outbox: &mut PiOutbox, message: PiWrite, _time: Time, _limit: Time) -> SchedulerResult {
         todo!("PI write {:#010x} = {:#010x}", message.cart_addr, message.data);
     }
 }

@@ -39,36 +39,60 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
     let named_enum = NamedEnum::from_derive_input(&input).expect("failed to parse enum");
     let DeriveInput { ident, .. } = input;
 
-    let mut make_patterns = Vec::new();
+
+    let storage_type = quote::format_ident!("{}Storage", ident);
+    let base = &named_enum.base[0];
+
     let mut from_patterns = Vec::new();
     let mut size_patterns = Vec::new();
+    let mut storage_patterns = Vec::new();
 
     let mut classes = Vec::new();
+
+    let mut varients = Vec::new();
     for variant in named_enum.data.take_enum().unwrap() {
         let class_path: &syn::Path = &variant.class[0];
         let name = variant.ident;
-        let id = make_patterns.len();
 
-        make_patterns.push(quote! {
-            #ident::#name => Box::pin(#class_path::default()),
-        });
+        let id = varients.len();
+        varients.push(name.clone());
+
         from_patterns.push(quote! {
             #id => #class_path::name(),
         });
         size_patterns.push(quote! {
             #ident::#name => core::mem::size_of::<#class_path>(),
         });
+        storage_patterns.push(quote! {
+            #name: #base<#ident, #class_path>,
+        });
 
         classes.push(quote! {
             impl actor_framework::Named<#ident> for #class_path {
                 #[inline(always)] fn name() -> #ident { #ident::#name }
                 #[inline(always)] fn dyn_name(&self) -> #ident { #ident::#name }
+                #[inline(always)]
+                fn from_storage<'a, 'b>(storage: &'a mut #storage_type)
+                    -> &'b mut actor_framework::ActorBox<#ident, Self>
+                where
+                    'a: 'b
+                {
+                    &mut storage.#name
+                }
+            }
+
+            impl<'a, 'b> From<&'a mut #storage_type> for &'b mut #base<#ident, #class_path>
+            //where 'a: 'b
+             {
+                #[inline(always)]
+                fn from(storage: &'a mut #storage_type) -> Self {
+                    &mut storage.#name
+                }
             }
         });
     }
 
-    let count = make_patterns.len();
-    let base = &named_enum.base[0];
+    let count = varients.len();
     let exit_reason = &named_enum.exit_reason[0];
 
     let output = quote! {
@@ -77,17 +101,35 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
 
         impl actor_framework::MakeNamed for #ident {
             const COUNT: usize = #count;
-            type Base = dyn #base<#ident>;
+            type Base<A> = #base<#ident, A> where A: actor_framework::Actor<#ident>;
             type ExitReason = Box<dyn #exit_reason>;
+            type StorageType = #storage_type;
 
-            fn make(id: Self) -> std::pin::Pin<Box<Self::Base>> {
-                match id {
-                    #(#make_patterns)*
-                }
-            }
             fn size_of(id: Self) -> usize {
                 match id {
                     #(#size_patterns)*
+                }
+            }
+        }
+
+        struct #storage_type {
+            #(#storage_patterns)*
+        }
+
+        impl actor_framework::AsBase<#ident> for #storage_type {
+            fn as_base(&self, id: #ident) -> & actor_framework::ActorBoxBase<#ident> {
+                unsafe {
+                    match id {
+                        #(#ident::#varients => std::mem::transmute(&self.#varients),)*
+                    }
+                }
+            }
+        }
+
+        impl Default for #storage_type {
+            fn default() -> Self {
+                Self {
+                    #(#varients: Default::default(),)*
                 }
             }
         }
@@ -109,6 +151,8 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
             }
         }
     };
+
+    println!("{}", output);
 
     output.into()
 }

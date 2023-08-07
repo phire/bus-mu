@@ -9,7 +9,6 @@ use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor, pi_actor::{PiAct
 use crate::{vr4300::{self}, actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::{RspActor, self}}};
 
 pub struct CpuActor {
-    outbox: CpuOutbox,
     committed_time: Time,
     _cpu_overrun: u32,
     cpu_core: vr4300::Core,
@@ -56,7 +55,6 @@ fn to_bus_time(cpu_time: u64, odd: u64) -> u64 {
 impl Default for CpuActor {
     fn default() -> Self {
         let mut actor = CpuActor {
-            outbox: Default::default(),
             committed_time: Default::default(),
             _cpu_overrun: 0,
             cpu_core: Default::default(),
@@ -66,7 +64,8 @@ impl Default for CpuActor {
             bus_free: Default::default(),
             recursion: 0,
         };
-        actor.outbox.send::<CpuActor>(CpuRun {}, Default::default());
+        todo!();
+        //actor.outbox.send::<CpuActor>(CpuRun {}, Default::default());
 
         actor
     }
@@ -78,7 +77,7 @@ enum AdvanceResult {
 }
 
 impl CpuActor {
-    fn advance(&mut self, _: CpuRun, limit: Time) -> AdvanceResult {
+    fn advance(&mut self, outbox: &mut CpuOutbox, _: CpuRun, limit: Time) -> AdvanceResult {
         let limit_64: u64 = limit.into();
         let mut commit_time_64: u64 = self.committed_time.into();
 
@@ -101,7 +100,7 @@ impl CpuActor {
 
             return match result.reason {
                 vr4300::Reason::Limited => {
-                    self.outbox.send::<CpuActor>(CpuRun {}, self.committed_time);
+                    outbox.send::<CpuActor>(CpuRun {}, self.committed_time);
                     AdvanceResult::Limited
                 }
                 vr4300::Reason::SyncRequest => {
@@ -114,12 +113,12 @@ impl CpuActor {
                         continue;
                     }
 
-                    self.outbox.send::<CpuActor>(CpuRun {}, self.committed_time);
+                    outbox.send::<CpuActor>(CpuRun {}, self.committed_time);
                     AdvanceResult::Limited
                 }
                 reason => {
                     // Request over C-BUS/D-BUS
-                    self.start_request(reason, limit);
+                    self.start_request(outbox, reason, limit);
 
                     AdvanceResult::MemRequest
                 }
@@ -127,7 +126,7 @@ impl CpuActor {
         };
     }
 
-    fn start_request(&mut self, request: vr4300::Reason, limit: Time) {
+    fn start_request(&mut self, outbox: &mut CpuOutbox, request: vr4300::Reason, limit: Time) {
         self.outstanding_mem_request = Some(request);
         let request_time = core::cmp::max(self.bus_free, self.committed_time);
 
@@ -136,13 +135,13 @@ impl CpuActor {
             // and we can avoid the scheduler
             self.recursion += 1;
 
-            Pin::new(self).recv(BusAccept{}, request_time.add(1), limit);
+            self.recv(outbox, BusAccept{}, request_time.add(1), limit);
         } else {
-            self.outbox.send::<BusActor>(BusRequest::new::<Self>(1), request_time);
+            outbox.send::<BusActor>(BusRequest::new::<Self>(1), request_time);
         }
     }
 
-    fn finish_mem(&mut self, mem_finished: MemFinished, time: Time, limit: Time) -> SchedulerResult {
+    fn finish_mem(&mut self, outbox: &mut CpuOutbox, mem_finished: MemFinished, time: Time, limit: Time) -> SchedulerResult {
         let request = self.outstanding_mem_request.take().unwrap();
         //println!("CPU: Finishing {:} = {:x?} at {:}", request, mem_finished, time);
 
@@ -161,7 +160,7 @@ impl CpuActor {
         self.bus_free = finish_time;
 
         // Advance the CPU upto the finish time
-        self.advance(CpuRun {  }, finish_time);
+        self.advance(outbox, CpuRun {  }, finish_time);
 
         let req_type = request.request_type();
 
@@ -171,7 +170,7 @@ impl CpuActor {
 
                 if let Some(new_req) = new_req {
                     assert!(self.outstanding_mem_request.is_none());
-                    self.start_request(new_req, limit);
+                    self.start_request(outbox, new_req, limit);
                 }
             }
             MemFinished::Write(message) => {
@@ -180,12 +179,12 @@ impl CpuActor {
         }
 
         if self.recursion < RECURSION_LIMIT && limit > finish_time {
-            if self.outbox.contains::<CpuRun>() {
+            if outbox.contains::<CpuRun>() {
                 // The CPU core is ready to run (it didn't issue a new memory request)
                 // Might as well run it now to save scheduler overhead
                 self.recursion += 1;
-                let (_ , cpurun) = self.outbox.cancel();
-                self.advance(cpurun, limit);
+                let (_ , cpurun) = outbox.cancel();
+                self.advance(outbox, cpurun, limit);
             }
         }
 
@@ -194,38 +193,36 @@ impl CpuActor {
 }
 
 impl Actor<N64Actors> for CpuActor {
-    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut MessagePacketProxy<N64Actors>> {
-        unsafe { self.map_unchecked_mut(|s| s.outbox.as_mut()) }
-    }
+    type OutboxType = CpuOutbox;
 
-    fn message_delivered(mut self: Pin<&mut Self>, _time: Time) {
+    fn message_delivered(&mut self, _outbox: &mut CpuOutbox, _time: Time) {
         self.recursion = 0;
     }
 }
 
-impl Handler<ReadFinished> for CpuActor {
-    fn recv(&mut self, message: ReadFinished, time: Time, limit: Time) -> SchedulerResult {
-        self.finish_mem(MemFinished::Read(message), time, limit)
+impl Handler<N64Actors, ReadFinished> for CpuActor {
+    fn recv(&mut self, outbox: &mut CpuOutbox, message: ReadFinished, time: Time, limit: Time) -> SchedulerResult {
+        self.finish_mem(outbox, MemFinished::Read(message), time, limit)
     }
 }
 
-impl Handler<WriteFinished> for CpuActor {
-    fn recv(&mut self, message: WriteFinished, time: Time, limit: Time) -> SchedulerResult {
-        self.finish_mem(MemFinished::Write(message), time, limit)
+impl Handler<N64Actors, WriteFinished> for CpuActor {
+    fn recv(&mut self, outbox: &mut CpuOutbox, message: WriteFinished, time: Time, limit: Time) -> SchedulerResult {
+        self.finish_mem(outbox, MemFinished::Write(message), time, limit)
     }
 }
 
-impl Handler<CpuRun> for CpuActor {
-    fn recv(&mut self, msg: CpuRun, time: Time, limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CpuRun> for CpuActor {
+    fn recv(&mut self, outbox: &mut CpuOutbox, msg: CpuRun, time: Time, limit: Time) -> SchedulerResult {
         debug_assert!(time == self.committed_time);
         if time == limit {
-            self.outbox.send::<CpuActor>(msg, time);
+            outbox.send::<CpuActor>(msg, time);
 
             // Let the scheduler know we are zero limited
             return SchedulerResult::ZeroLimit;
         }
 
-        self.advance(msg, limit);
+        self.advance(outbox, msg, limit);
 
         SchedulerResult::Ok
     }
@@ -241,22 +238,23 @@ pub struct CpuRegWrite {
 }
 
 impl CpuActor {
-    fn do_reg<Dest>(&mut self, reason: vr4300::Reason, time: Time)
+    fn do_reg<Dest>(&mut self, outbox: &mut CpuOutbox, reason: vr4300::Reason, time: Time)
     where
-        Dest: Actor<N64Actors> + Handler<CpuRegRead> + Handler<CpuRegWrite>
+        Dest: for<'a, 'b> actor_framework::Receiver<'a, 'b, N64Actors, CpuRegRead>
+            + for<'a, 'b> actor_framework::Receiver<'a, 'b, N64Actors, CpuRegWrite>
     {
         match reason {
             vr4300::Reason::BusRead32(_, address) => {
-                self.outbox.send::<Dest>(CpuRegRead { address: address }, time);
+                outbox.send::<Dest>(CpuRegRead { address: address }, time);
             }
             vr4300::Reason::BusWrite32(_, address, data) => {
-                self.outbox.send::<Dest>(CpuRegWrite { address: address, data: data }, time);
+                outbox.send::<Dest>(CpuRegWrite { address: address, data: data }, time);
             }
             _ => { panic!("unexpected bus operation") }
         }
     }
 
-    fn do_rspmem(&mut self, reason: vr4300::Reason, time: Time, limit: Time) {
+    fn do_rspmem(&mut self, outbox: &mut CpuOutbox, reason: vr4300::Reason, time: Time, limit: Time) {
         let mem = match reason.address() & 0x1000 == 0 {
             true => self.dmem.as_mut(),
             false => self.imem.as_mut(),
@@ -268,24 +266,24 @@ impl CpuActor {
             match reason {
                 vr4300::Reason::BusRead32(_, _) => {
                     let data = mem[offset];
-                    self.finish_mem(MemFinished::Read(ReadFinished::word(data)), time, limit);
+                    self.finish_mem(outbox, MemFinished::Read(ReadFinished::word(data)), time, limit);
                 }
                 vr4300::Reason::BusWrite32(_, _, data) => {
                     mem[offset] = data;
-                    self.finish_mem(MemFinished::Write(WriteFinished::word()), time, limit);
+                    self.finish_mem(outbox, MemFinished::Write(WriteFinished::word()), time, limit);
                 }
                 _ => { panic!("unexpected bus operation") }
             }
         } else {
             // The CPU doesn't currently have ownership of imem/dmem, need to request it from RspActor
             self.outstanding_mem_request = Some(reason);
-            self.outbox.send::<RspActor>(rsp_actor::ReqestMemOwnership {}, time)
+            outbox.send::<RspActor>(rsp_actor::ReqestMemOwnership {}, time)
         }
     }
 }
 
-impl Handler<BusAccept> for CpuActor {
-    fn recv(&mut self, _: BusAccept, time: Time, limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, BusAccept> for CpuActor {
+    fn recv(&mut self, outbox: &mut CpuOutbox, _: BusAccept, time: Time, limit: Time) -> SchedulerResult {
         let reason = self.outstanding_mem_request.clone().unwrap();
         let address = reason.address();
 
@@ -296,14 +294,14 @@ impl Handler<BusAccept> for CpuActor {
             0x0400_0000 => match address & 0x040c_0000 { // RSP
                 0x0400_0000 if address & 0x1000 == 0 => { // DMEM Direct access
                     //println!("DMEM access {}", reason);
-                    self.do_rspmem(reason, time, limit);
+                    self.do_rspmem(outbox, reason, time, limit);
                 }
                 0x0400_0000 if address & 0x1000 != 0 => { // IMEM Direct access
                     //println!("IMEM access {}", reason);
-                    self.do_rspmem(reason, time, limit);
+                    self.do_rspmem(outbox, reason, time, limit);
                 }
                 0x0404_0000 | 0x0408_0000 => { // RSP Register
-                    self.do_reg::<RspActor>(reason, time);
+                    self.do_reg::<RspActor>(outbox, reason, time);
                 }
                 0x040c_0000 => { // Unmapped {
                     todo!("Unmapped")
@@ -311,7 +309,7 @@ impl Handler<BusAccept> for CpuActor {
                 _ => unreachable!()
             }
             0x0410_0000 => { // RDP Command Regs
-                self.do_reg::<RdpActor>(reason, time);
+                self.do_reg::<RdpActor>(outbox, reason, time);
             }
             0x0420_0000 => {
                 todo!("RDP Span Regs")
@@ -320,33 +318,33 @@ impl Handler<BusAccept> for CpuActor {
                 todo!("MIPS Interface")
             }
             0x0440_0000 => { // Video Interface
-                self.do_reg::<ViActor>(reason, time);
+                self.do_reg::<ViActor>(outbox, reason, time);
             }
             0x0450_0000 => { // Audio Interface
-                self.do_reg::<AiActor>(reason, time);
+                self.do_reg::<AiActor>(outbox, reason, time);
             }
             0x0460_0000 => { // Peripheral Interface
-                self.do_reg::<PiActor>(reason, time);
+                self.do_reg::<PiActor>(outbox, reason, time);
             }
             0x0470_0000 => {
                 todo!("RDRAM Interface")
             }
             0x0480_0000 => { // Serial Interface
-                self.do_reg::<SiActor>(reason, time);
+                self.do_reg::<SiActor>(outbox, reason, time);
             }
             0x0490_0000..=0x04ff_ffff => {
                 todo!("Unmapped")
             }
             0x1fc0_0000 => { // SI External Bus
-                self.do_reg::<SiActor>(reason, time);
+                self.do_reg::<SiActor>(outbox, reason, time);
             }
             0x0500_0000..=0x7fff_0000 => { // PI External bus
                 match reason {
                     vr4300::Reason::BusRead32(_, _) => {
-                        self.outbox.send::<PiActor>(pi_actor::PiRead::new(address), time);
+                        outbox.send::<PiActor>(pi_actor::PiRead::new(address), time);
                     }
                     vr4300::Reason::BusWrite32(_, _, data) => {
-                        self.outbox.send::<PiActor>(pi_actor::PiWrite::new(address, data), time);
+                        outbox.send::<PiActor>(pi_actor::PiWrite::new(address, data), time);
                     }
                     _ => { panic!("unexpected bus operation") }
                 }
@@ -443,27 +441,27 @@ impl WriteFinished {
     }
 }
 
-impl Handler<rsp_actor::TransferMemOwnership> for CpuActor {
-    fn recv(&mut self, message: rsp_actor::TransferMemOwnership, time: Time, limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, rsp_actor::TransferMemOwnership> for CpuActor {
+    fn recv(&mut self, outbox: &mut CpuOutbox, message: rsp_actor::TransferMemOwnership, time: Time, limit: Time) -> SchedulerResult {
         self.imem = Some(message.imem);
         self.dmem = Some(message.dmem);
 
         // We can now complete the memory request to imem or dmem
         let reason = self.outstanding_mem_request.clone().unwrap();
-        self.do_rspmem(reason, time, limit);
+        self.do_rspmem(outbox, reason, time, limit);
 
         SchedulerResult::Ok
     }
 }
 
-impl Handler<rsp_actor::ReqestMemOwnership> for CpuActor {
-    fn recv(&mut self, _message: rsp_actor::ReqestMemOwnership, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, rsp_actor::ReqestMemOwnership> for CpuActor {
+    fn recv(&mut self, outbox: &mut CpuOutbox, _: rsp_actor::ReqestMemOwnership, time: Time, _limit: Time) -> SchedulerResult {
         let msg = rsp_actor::TransferMemOwnership {
             imem: self.imem.take().unwrap(),
             dmem: self.imem.take().unwrap(),
         };
 
-        self.outbox.send::<RspActor>(msg, time.add(4));
+        outbox.send::<RspActor>(msg, time.add(4));
 
         SchedulerResult::Ok
     }

@@ -9,7 +9,6 @@ use super::{N64Actors, si_actor::{SiPacket, SiActor}};
 use crate::{pif, cic};
 
 pub struct PifActor {
-    outbox: PifOutbox,
     pif_mem: [u32; 512], // Combined PIF RAN and. Last 16 words are RAM
     state: PifState,
     addr: u16,
@@ -37,11 +36,12 @@ impl Default for PifActor {
             .try_into()
             .expect("Incorrect PIF Rom size");
 
-        let mut outbox = PifOutbox::default();
-        outbox.send::<PifActor>(PifHleMain{}, 100.into());
+        //let mut outbox = PifOutbox::default();
+        //outbox.send::<PifActor>(PifHleMain{}, 100.into());
+
+        todo!("default");
 
         PifActor {
-            outbox,
             pif_mem,
             state: PifState::WaitCmd,
             addr: 0,
@@ -55,13 +55,11 @@ impl Default for PifActor {
 }
 
 impl Actor<N64Actors> for PifActor {
-    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut actor_framework::MessagePacketProxy<N64Actors>> {
-        unsafe { self.map_unchecked_mut(|s| s.outbox.as_mut()) }
-    }
+    type OutboxType = PifOutbox;
 
-    fn message_delivered(mut self: Pin<&mut Self>, _: Time) {
+    fn message_delivered(&mut self, outbox: &mut PifOutbox, _: Time) {
         let time = self.pif_time;
-        self.outbox.send::<Self>(PifHleMain{}, time);
+        outbox.send::<Self>(PifHleMain{}, time);
     }
 }
 
@@ -74,18 +72,18 @@ impl PifActor {
         }
     }
 
-    fn read(&mut self, time: Time) {
+    fn read(&mut self, outbox: &mut PifOutbox, time: Time) {
         match self.burst {
             false => {
                 let data = self.read_word(self.addr as usize);
                 println!("PIF: Read {:08x} from {:04x}", data, self.addr);
-                self.outbox.send::<SiActor>(SiPacket::Data4(data), time);
+                outbox.send::<SiActor>(SiPacket::Data4(data), time);
             }
             true => {
                 let data: [u32; 16] = core::array::from_fn(|i| {
                     self.read_word(self.addr as usize + i)
                 });
-                self.outbox.send::<SiActor>(SiPacket::Data64(data), time);
+                outbox.send::<SiActor>(SiPacket::Data64(data), time);
             }
         }
     }
@@ -106,14 +104,14 @@ enum PifState {
     WaitData,
 }
 
-impl Handler<SiPacket> for PifActor {
-    fn recv(&mut self, message: SiPacket, time: Time, _limit: Time) -> SchedulerResult {
-        if self.outbox.contains::<PifHleMain>() {
-            let (_, _msg) : (_, PifHleMain) = self.outbox.cancel();
+impl Handler<N64Actors, SiPacket> for PifActor {
+    fn recv(&mut self, outbox: &mut PifOutbox, message: SiPacket, time: Time, _limit: Time) -> SchedulerResult {
+        if outbox.contains::<PifHleMain>() {
+            let (_, _msg) : (_, PifHleMain) = outbox.cancel();
         }
 
-        if self.outbox.contains::<SiPacket>() {
-            let (old_time, old_msg) : (_, SiPacket) = self.outbox.cancel();
+        if outbox.contains::<SiPacket>() {
+            let (old_time, old_msg) : (_, SiPacket) = outbox.cancel();
 
             panic!("PIF: {:?} stompted {:?} during {:?} @ {}", message, old_msg, self.state, old_time);
         }
@@ -165,12 +163,12 @@ impl Handler<SiPacket> for PifActor {
                 //         But n64-systembench indicates it's more like 1800 cycles
                 //         This is chaotic, caused by how long it takes for the sm5 core to respond
                 //         to an interrupt and halt
-                self.outbox.send::<SiActor>(SiPacket::Ack, time.add(450 * 4))
+                outbox.send::<SiActor>(SiPacket::Ack, time.add(450 * 4))
             }
             PifState::WaitAck => match message {
                 SiPacket::Ack => {
                     self.state = PifState::WaitCmd;
-                    self.read(time);
+                    self.read(outbox, time);
                 }
                 _ => panic!("Unexpected message {:?}", message),
             }
@@ -188,7 +186,7 @@ impl Handler<SiPacket> for PifActor {
                     _ => panic!("Unexpected message {:?}", message),
                 }
 
-                self.outbox.send::<SiActor>(SiPacket::Finish, time);
+                outbox.send::<SiActor>(SiPacket::Finish, time);
                 self.state = PifState::WaitCmd;
             }
         }
@@ -266,8 +264,8 @@ impl pif::PifIO for PifHleIoProxy<'_> {
 
 struct PifHleMain {}
 
-impl Handler<PifHleMain> for PifActor {
-    fn recv(&mut self, _: PifHleMain, time: Time, _: Time) -> SchedulerResult {
+impl Handler<N64Actors, PifHleMain> for PifActor {
+    fn recv(&mut self, outbox: &mut PifOutbox,  _: PifHleMain, time: Time, _: Time) -> SchedulerResult {
         let (pif_core, mut io) = PifHleIoProxy::split(self);
 
         self.pif_time = pif_core.main(&mut io, time);

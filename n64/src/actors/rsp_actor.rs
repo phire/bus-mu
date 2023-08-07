@@ -5,7 +5,6 @@ use actor_framework::*;
 use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite, WriteFinished}};
 
 pub struct RspActor {
-    outbox: RspOutbox,
     halted: bool,
     dma_busy: bool,
     imem: Option<Box<[u32; 1024]>>,
@@ -23,7 +22,6 @@ make_outbox!(
 impl Default for RspActor {
     fn default() -> Self {
         Self {
-            outbox: Default::default(),
             // HWTEST: IPL1 starts with a loop checking this bit, which implies that RSP might not
             //         enter the halted state immediately on a soft reset.
             halted: true,
@@ -35,17 +33,11 @@ impl Default for RspActor {
 }
 
 impl Actor<N64Actors> for RspActor {
-    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut MessagePacketProxy<N64Actors>> {
-        unsafe { self.map_unchecked_mut(|s| s.outbox.as_mut()) }
-    }
-
-    fn message_delivered(self: Pin<&mut Self>, _time: Time) {
-        // do nothing
-    }
+    type OutboxType = RspOutbox;
 }
 
-impl Handler<CpuRegRead> for RspActor {
-    fn recv(&mut self, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CpuRegRead> for RspActor {
+    fn recv(&mut self, outbox: &mut RspOutbox, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
         let address = message.address;
         let data = match address {
             0x0404_0000 => { // SP_DMA_SPADDR
@@ -78,7 +70,7 @@ impl Handler<CpuRegRead> for RspActor {
             }
             _ => unimplemented!()
         };
-        self.outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
+        outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
         SchedulerResult::Ok
     }
 }
@@ -91,8 +83,8 @@ fn deinterlave8(mut data: u32) -> u32 {
     (data | data >> 4) & 0x00ff
 }
 
-impl Handler<CpuRegWrite> for RspActor {
-    fn recv(&mut self, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CpuRegWrite> for RspActor {
+    fn recv(&mut self, outbox: &mut RspOutbox, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
         let data = message.data;
         match message.address {
             0x0404_0000 => { // SP_DMA_SPADDR
@@ -157,7 +149,7 @@ impl Handler<CpuRegWrite> for RspActor {
             }
             _ => unimplemented!()
         };
-        self.outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
+        outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
         SchedulerResult::Ok
     }
 }
@@ -170,8 +162,8 @@ pub(super) struct TransferMemOwnership {
     pub dmem: Box<[u32; 1024]>,
 }
 
-impl Handler<TransferMemOwnership> for RspActor {
-    fn recv(&mut self, message: TransferMemOwnership, _time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, TransferMemOwnership> for RspActor {
+    fn recv(&mut self, outbox: &mut RspOutbox, message: TransferMemOwnership, _time: Time, _limit: Time) -> SchedulerResult {
         self.imem = Some(message.imem);
         self.dmem = Some(message.dmem);
 
@@ -180,11 +172,11 @@ impl Handler<TransferMemOwnership> for RspActor {
     }
 }
 
-impl Handler<ReqestMemOwnership> for RspActor {
-    fn recv(&mut self, _message: ReqestMemOwnership, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, ReqestMemOwnership> for RspActor {
+    fn recv(&mut self, outbox: &mut RspOutbox, _message: ReqestMemOwnership, time: Time, _limit: Time) -> SchedulerResult {
         // TODO: calculate timings for when RSP is busy
         // TODO: Handle cases where the RSP DMA is active (which apparently corrupts CPU accesses)
-        self.outbox.send::<CpuActor>(TransferMemOwnership {
+        outbox.send::<CpuActor>(TransferMemOwnership {
             imem: self.imem.take().unwrap(),
             dmem: self.dmem.take().unwrap(),
         }, time);

@@ -5,7 +5,6 @@ use actor_framework::*;
 use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite, WriteFinished}};
 
 pub struct AiActor {
-    outbox: AiOutbox,
     dram_addr: u32,
     length: u32,
     dma_enable: bool,
@@ -21,7 +20,6 @@ make_outbox!(
 impl Default for AiActor {
     fn default() -> Self {
         Self {
-            outbox: Default::default(),
             dram_addr: 0,
             length: 0,
             dma_enable: false,
@@ -30,17 +28,14 @@ impl Default for AiActor {
 }
 
 impl Actor<N64Actors> for AiActor {
-    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut MessagePacketProxy<N64Actors>> {
-        unsafe { self.map_unchecked_mut(|s| s.outbox.as_mut()) }
-    }
-
-    fn message_delivered(self: Pin<&mut Self>, _time: Time) {
+    type OutboxType = AiOutbox;
+    fn message_delivered(&mut self, outbox: &mut Self::OutboxType, _time: Time) {
         // do nothing
     }
 }
 
-impl Handler<CpuRegWrite> for AiActor {
-    fn recv(&mut self, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CpuRegWrite> for AiActor {
+    fn recv(&mut self, outbox: &mut AiOutbox, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
         let data = message.data;
         match message.address & 0x1c {
             0x00 => { // AI_DRAM_ADDR
@@ -69,13 +64,13 @@ impl Handler<CpuRegWrite> for AiActor {
             }
             _ => unreachable!()
         }
-        self.outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
+        outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
         SchedulerResult::Ok
     }
 }
 
-impl Handler<CpuRegRead> for AiActor {
-    fn recv(&mut self, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CpuRegRead> for AiActor {
+    fn recv(&mut self, outbox: &mut AiOutbox, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
         let data = match message.address & 0x1c {
             0x00 => { // AI_DRAM_ADDR
                 println!("read AI_DRAM_ADDR");
@@ -108,7 +103,7 @@ impl Handler<CpuRegRead> for AiActor {
             }
             _ => unreachable!()
         };
-        self.outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
+        outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
         SchedulerResult::Ok
     }
 }

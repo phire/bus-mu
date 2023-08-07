@@ -7,7 +7,6 @@ use crate::N64Actors;
 use super::cpu_actor::{ReadFinished, WriteFinished, CpuRegWrite, CpuRegRead, CpuActor};
 
 pub struct RdpActor {
-    outbox: RdpOutbox,
     start: u32,
     end: u32,
 }
@@ -22,7 +21,6 @@ make_outbox!(
 impl Default for RdpActor {
     fn default() -> Self {
         Self {
-            outbox: Default::default(),
             start: 0,
             end: 0,
         }
@@ -30,17 +28,11 @@ impl Default for RdpActor {
 }
 
 impl Actor<N64Actors> for RdpActor {
-    fn get_message<'a>(self: Pin<&'a mut Self>) -> Pin<&'a mut MessagePacketProxy<N64Actors>> {
-        unsafe { self.map_unchecked_mut(|s| s.outbox.as_mut()) }
-    }
-
-    fn message_delivered(self: Pin<&mut Self>, _time: Time) {
-        // do nothing
-    }
+    type OutboxType = RdpOutbox;
 }
 
-impl Handler<CpuRegWrite> for RdpActor {
-    fn recv(&mut self, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CpuRegWrite> for RdpActor {
+    fn recv(&mut self, outbox: &mut RdpOutbox, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
         let data = message.data;
         match message.address & 0x1c {
             0x00 => { // DP_START
@@ -72,13 +64,13 @@ impl Handler<CpuRegWrite> for RdpActor {
             }
             _ => unreachable!()
         }
-        self.outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
+        outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
         SchedulerResult::Ok
     }
 }
 
-impl Handler<CpuRegRead> for RdpActor {
-    fn recv(&mut self, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CpuRegRead> for RdpActor {
+    fn recv(&mut self, outbox: &mut RdpOutbox, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
         let data = match message.address & 0x1c {
             0x00 => { // DP_START
                 println!("RDP read DP_START = {:#010x}", self.start);
@@ -110,7 +102,7 @@ impl Handler<CpuRegRead> for RdpActor {
             }
             _ => unreachable!()
         };
-        self.outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
+        outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
         SchedulerResult::Ok
     }
 }
