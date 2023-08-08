@@ -8,7 +8,7 @@ mod endpoint;
 mod message_packet;
 mod scheduler;
 mod time;
-//mod enum_map;
+mod enum_map;
 mod object_map;
 mod named;
 mod outbox;
@@ -23,7 +23,7 @@ pub use time::Time;
 pub use message_packet::{MessagePacket, MessagePacketProxy};
 pub use outbox::{Outbox, OutboxSend};
 pub use scheduler::{Scheduler, SchedulerResult};
-//pub use enum_map::EnumMap;
+pub use enum_map::EnumMap;
 
 pub trait Actor<ActorNames> : Named<ActorNames>
 where
@@ -32,6 +32,10 @@ where
 {
     type OutboxType;
 
+    /// `message_delivered` is called immediately after the scheduler delivered this actor's previous message.
+    ///
+    /// Useful for actors that need to send multiple messages at once, or restore message
+    /// that was previously interrupted
     #[inline(always)]
     fn message_delivered(&mut self, _outbox: &mut Self::OutboxType, _time: Time) { }
 }

@@ -1,4 +1,4 @@
-use crate::{MakeNamed, Handler, Addr, Actor};
+use crate::{MakeNamed, Handler, Actor};
 
 /// An Endpoint is half of a `Channel`.
 /// The Receiver and Message type is known at compile time but the Sender is dynamically dispatched.
@@ -39,19 +39,6 @@ impl<ActorNames, Message> Clone for Endpoint<ActorNames, Message>
     fn clone(&self) -> Self {
         Endpoint {
             endpoint_fn: self.endpoint_fn,
-        }
-    }
-}
-
-impl<A, ActorNames> Addr<A, ActorNames>
- where ActorNames: MakeNamed,
-{
-    pub fn make_channel<Message>(&self) -> Endpoint<ActorNames, Message>
-    where
-        A : Handler<ActorNames, Message> + Actor<ActorNames>,
-    {
-        Endpoint {
-            endpoint_fn: crate::scheduler::receive_for_endpoint::<ActorNames, A, Message>,
         }
     }
 }

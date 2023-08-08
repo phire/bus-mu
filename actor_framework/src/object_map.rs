@@ -42,7 +42,7 @@ impl<E> ObjectStore<E> where
     }
 
     #[inline(always)]
-    pub fn get_base<'a>(&'a mut self, id: E) -> &'a ActorBoxBase<E>
+    pub fn get_base<'a>(&'a mut self, id: E) -> &'a mut ActorBoxBase<E>
     where
         E::StorageType: AsBase<E>,
     {
@@ -82,14 +82,21 @@ impl<'a, E, U> ObjectStoreView<'a, E, U>
     }
 
     #[inline(always)]
-    pub fn get_obj<'b, 'c, V>(&'b mut self) -> &'b mut ActorBox<E, V>
-    where
-        V: Named<E> + Sized + Actor<E> + 'b,
-        <V as Actor<E>>::OutboxType: Outbox<E>,
-        'a: 'b,
-    {
+    pub fn close<'b>(self) -> &'b mut ObjectStore<E> {
         unsafe {
-            self.storage.as_mut().unwrap_unchecked().get()
+            self.storage.as_mut().unwrap_unchecked()
         }
     }
+
+    // #[inline(always)]
+    // pub fn get_obj<'b, 'c, V>(&'b mut self) -> &'b mut ActorBox<E, V>
+    // where
+    //     V: Named<E> + Sized + Actor<E> + 'b,
+    //     <V as Actor<E>>::OutboxType: Outbox<E>,
+    //     'a: 'b,
+    // {
+    //     unsafe {
+    //         self.storage.as_mut().unwrap_unchecked().get()
+    //     }
+    // }
 }

@@ -6,6 +6,8 @@ where
     ActorNames: MakeNamed,
 {
     type Sender;
+    fn time(&self) -> Time;
+    //fn as_proxy<'a>(&'a mut self) -> &'a mut MessagePacketProxy<ActorNames>;
 }
 
 pub trait OutboxSend<ActorNames, Message> : Outbox<ActorNames>
@@ -90,6 +92,12 @@ macro_rules! make_outbox {
             ActorNames: actor_framework::MakeNamed,
         {
             type Sender = $sender;
+            fn time(&self) -> Time {
+                unsafe { self.none.time }
+            }
+            // fn as_proxy<'a>(&'a mut self) -> &'a mut actor_framework::MessagePacketProxy<ActorNames> {
+            //     unsafe { core::mem::transmute(&mut self.none) }
+            // }
         }
 
         impl core::default::Default for $name {
@@ -158,7 +166,7 @@ macro_rules! make_outbox {
                 let msg_type = unsafe { self.none.msg_type() };
                 if msg_type == std::any::TypeId::of::<$field_type>() {
                     unsafe {
-                        return self.$field_ident.take();
+                        return self.$field_ident.take().unwrap_unchecked();
                     }
                 } else {
                     let typename = std::any::type_name::<$field_type>();

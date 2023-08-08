@@ -96,11 +96,22 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
             type Base<A> = #base<#ident, A> where A: actor_framework::Actor<#ident>;
             type ExitReason = Box<dyn #exit_reason>;
             type StorageType = #storage_type;
+            type ArrayType<T> = [T; #count];
 
             fn size_of(id: Self) -> usize {
                 match id {
                     #(#size_patterns)*
                 }
+            }
+
+            fn index_array<T>(array: &Self::ArrayType<T>, id: Self) -> &T {
+                &array[usize::from(id)]
+            }
+            fn index_array_mut<T>(array: &mut Self::ArrayType<T>, id: Self) -> &mut T {
+                &mut array[usize::from(id)]
+            }
+            fn array_from_fn<T>(mut f: impl FnMut(Self) -> T) -> Self::ArrayType<T> {
+                std::array::from_fn(|id| f(id.into()))
             }
         }
 
@@ -125,7 +136,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
 
         impl actor_framework::AsBase<#ident> for #storage_type {
             #[inline(always)]
-            fn as_base(&self, id: #ident) -> & actor_framework::ActorBoxBase<#ident> {
+            fn as_base(&mut self, id: #ident) -> &mut actor_framework::ActorBoxBase<#ident> {
                 // Soooo....
                 // I was going to do this the safer way (see inner.base_ptr() above)
                 // But rust/llvm generated really shitty code (using a jump table to do the job of an array)
@@ -134,7 +145,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
                 let ptr = self.base_ptrs[i];
 
                 unsafe {
-                    ptr.as_ref().unwrap_unchecked()
+                    ptr.as_mut().unwrap_unchecked()
                 }
             }
         }

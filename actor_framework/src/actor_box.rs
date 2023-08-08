@@ -17,7 +17,7 @@ where
     ActorNames: MakeNamed,
 {
     pub outbox: A::OutboxType,
-    pub actor: A,
+    pub obj: A,
 }
 
 impl<ActorNames, A> Default for ActorBox<ActorNames, A>
@@ -31,7 +31,7 @@ where
         let actor = <A as ActorCreate<ActorNames>>::new(&mut outbox, 0.into());
         ActorBox {
             outbox,
-            actor
+            obj: actor
         }
     }
 }
@@ -40,5 +40,5 @@ pub trait AsBase<ActorNames>
 where
     ActorNames: MakeNamed,
 {
-    fn as_base<'a>(&'a self, id: ActorNames) -> &'a ActorBoxBase<ActorNames>;
+    fn as_base<'a>(&'a mut self, id: ActorNames) -> &'a mut ActorBoxBase<ActorNames>;
 }

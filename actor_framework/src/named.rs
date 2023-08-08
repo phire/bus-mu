@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use crate::{ActorBox, Actor};
+use crate::{ActorBox, Actor, AsBase};
 
 pub trait Named<E> {
     fn name() -> E where Self: Sized;
@@ -16,12 +16,13 @@ pub trait Named<E> {
 
 pub trait MakeNamed : From<usize> + Into<usize> + PartialEq + Copy + 'static + std::fmt::Debug
 where
-    Self::StorageType: Default,
+    Self::StorageType: Default + AsBase<Self>,
 {
     const COUNT: usize;
     type Base<A> where A: Actor<Self>, Self: Sized;
     type ExitReason = Box<dyn std::error::Error>;
     type StorageType;
+    type ArrayType<T>;
 
     fn iter() -> NamedIterator<Self> where Self: Sized, Self: From<usize> {
         NamedIterator {
@@ -29,6 +30,10 @@ where
             e_type: PhantomData::<*const Self>,
         }
     }
+
+    fn index_array<T>(array: &Self::ArrayType<T>, id: Self) -> &T;
+    fn index_array_mut<T>(array: &mut Self::ArrayType<T>, id: Self) -> &mut T;
+    fn array_from_fn<T>(f: impl FnMut(Self) -> T) -> Self::ArrayType<T>;
 
     fn size_of(id: Self) -> usize;
 }

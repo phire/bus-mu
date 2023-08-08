@@ -4,32 +4,28 @@ use std::ops::{IndexMut, Index};
 pub struct EnumMap<T, E>
     where
         E: MakeNamed,
-        [(); E::COUNT]: ,
 {
-    contents: [T; E::COUNT]
+    contents: E::ArrayType<T>,
 }
 
 impl<T, E> EnumMap<T, E>
     where E: MakeNamed,
-          [(); E::COUNT]: ,
 {
     pub fn new() -> EnumMap<T, E>
     where
         T: Default,
-        usize: From<E>,
     {
         EnumMap {
-            contents: std::array::from_fn(|_| T::default())
+            contents: E::array_from_fn(|_| T::default())
         }
     }
 
-    pub fn from_fn<F>(mut f: F) -> EnumMap<T, E>
+    pub fn from_fn<F>(f: F) -> EnumMap<T, E>
     where
         F: FnMut(E) -> T,
-        usize: From<E>,
     {
         EnumMap {
-            contents: std::array::from_fn(|i| f(E::from(i)))
+            contents: E::array_from_fn(f)
         }
     }
 
@@ -45,7 +41,6 @@ impl<T, E> EnumMap<T, E>
 pub struct EnumMapIterator<'a, T, E>
     where
         E: MakeNamed,
-        [(); E::COUNT]: ,
 {
     pos: usize,
     map: &'a EnumMap<T, E>,
@@ -53,7 +48,6 @@ pub struct EnumMapIterator<'a, T, E>
 
 impl<'a, T, E> Iterator for EnumMapIterator<'a, T, E>
     where E: MakeNamed,
-          [(); E::COUNT]: ,
 {
     type Item = (E, &'a T);
 
@@ -61,7 +55,8 @@ impl<'a, T, E> Iterator for EnumMapIterator<'a, T, E>
         let i: usize = self.pos;
         if i < E::COUNT {
             self.pos = i + 1;
-            Some((i.into(), &self.map.contents[i]))
+            let id = i.into();
+            Some((id, E::index_array(&self.map.contents, id)))
         } else {
             None
         }
@@ -70,19 +65,17 @@ impl<'a, T, E> Iterator for EnumMapIterator<'a, T, E>
 
 impl<T, E> Index<E> for EnumMap<T, E>
     where E: MakeNamed,
-          [(); E::COUNT]: ,
 {
     type Output = T;
-    fn index(&self, index: E) -> &T {
-        &self.contents[index.into()]
+    fn index(&self, id: E) -> &T {
+        E::index_array(&self.contents, id)
     }
 }
 
 impl<T, E> IndexMut<E> for EnumMap<T, E>
     where E: MakeNamed,
-          [(); E::COUNT]: ,
 {
-    fn index_mut(&mut self, index: E) -> &mut T {
-        &mut self.contents[index.into()]
+    fn index_mut(&mut self, id: E) -> &mut T {
+        E::index_array_mut(&mut self.contents, id)
     }
 }

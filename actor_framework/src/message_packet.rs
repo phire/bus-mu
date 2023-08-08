@@ -2,7 +2,7 @@
 
 use std::{mem::{MaybeUninit, ManuallyDrop}, any::TypeId};
 
-use crate::{object_map::ObjectStore, MakeNamed, Time, Handler, Actor, Endpoint, SchedulerResult, OutboxSend, channel::Channel, scheduler::{ExecuteFn, EndpointFn}};
+use crate::{MakeNamed, Time, Handler, Actor, Endpoint, OutboxSend, channel::Channel, scheduler};
 
 #[derive(Debug)]
 #[repr(C)]
@@ -11,8 +11,8 @@ where
     ActorNames: MakeNamed,
 {
 
-    pub(crate) time: Time,
-    pub(crate) execute_fn: ExecuteFn<ActorNames>,
+    pub time: Time,
+    pub(crate) execute_fn: scheduler::ExecuteFn<ActorNames>,
     msg_type: TypeId,
 }
 
@@ -22,19 +22,12 @@ where
     ActorNames: MakeNamed,
     Message: 'static, // For TypeId
 {
-    pub(crate) time: Time,
-    pub(crate) execute_fn: ExecuteFn<ActorNames>,
+    pub time: Time,
+    pub(crate) execute_fn: scheduler::ExecuteFn<ActorNames>,
     msg_type: std::any::TypeId,
 
-    pub(crate) endpoint_fn: MaybeUninit<EndpointFn<ActorNames, Message>>,
+    pub(crate) endpoint_fn: MaybeUninit<scheduler::EndpointFn<ActorNames, Message>>,
     data: MaybeUninit<ManuallyDrop<Message>>,
-}
-
-fn null_execute<ActorNames>(_: ActorNames, _: &mut ObjectStore<ActorNames>, _: Time) -> SchedulerResult
-where
-    ActorNames: MakeNamed,
-{
-    panic!("Scheduler tried to execute an empty message");
 }
 
 impl<ActorNames> MessagePacketProxy<ActorNames>
@@ -42,7 +35,7 @@ where
     ActorNames: MakeNamed,
 {
     pub fn is_some(&self) -> bool {
-        self.execute_fn != null_execute::<ActorNames>
+        self.execute_fn != scheduler::null_execute::<ActorNames>
     }
     pub fn msg_type(&self) -> TypeId {
         self.msg_type
@@ -55,7 +48,7 @@ where
     Message: 'static,
 {
     pub fn is_some(&self) -> bool {
-        self.execute_fn != null_execute::<ActorNames>
+        self.execute_fn != scheduler::null_execute::<ActorNames>
     }
 
     pub fn msg_type(&self) -> TypeId {
@@ -72,7 +65,7 @@ where
             time,
             // Safety: It is essential that we instantiate the correct execute_fn
             //         template here. It relies on this function for type checking
-            execute_fn: crate::scheduler::direct_execute::<ActorNames, Sender, Receiver, Message>,
+            execute_fn: scheduler::direct_execute::<ActorNames, Sender, Receiver, Message>,
             msg_type: TypeId::of::<Message>(),
             endpoint_fn: MaybeUninit::uninit(),
             data: MaybeUninit::new(ManuallyDrop::new(data)),
@@ -109,19 +102,22 @@ where
         }
     }
 
-    pub unsafe fn take<'b>(&'b mut self) -> (Time, Message) {
-        //debug_assert!(self.execute_fn.is_some());
-        debug_assert!(self.msg_type == TypeId::of::<Message>());
+    pub fn take<'b>(&'b mut self) -> Option<(Time, Message)> {
+        if self.msg_type != TypeId::of::<Message>() {
+            return None
+        }
 
         self.msg_type = TypeId::of::<()>();
-        self.execute_fn = null_execute::<ActorNames>;
+        self.execute_fn = scheduler::null_execute::<ActorNames>;
 
         let mut time = Time::MAX;
         std::mem::swap(&mut self.time, &mut time);
         let mut data = MaybeUninit::uninit();
         std::mem::swap(&mut self.data, &mut data);
 
-        (time, ManuallyDrop::into_inner(data.assume_init()))
+        // Safety: Depends on the msg_type being correct
+        let data = unsafe { data.assume_init()};
+        Some((time, ManuallyDrop::into_inner(data)))
     }
 }
 
@@ -133,9 +129,7 @@ where
     fn drop(&mut self) {
         assert!(self.msg_type == TypeId::of::<Message>());
 
-        unsafe {
-            self.take();
-        }
+        self.take();
     }
 }
 
@@ -146,7 +140,7 @@ where
     fn default() -> Self {
         Self {
             time: Time::MAX,
-            execute_fn: null_execute::<ActorNames>,
+            execute_fn: scheduler::null_execute::<ActorNames>,
             msg_type: TypeId::of::<()>(),
             endpoint_fn: MaybeUninit::uninit(),
             data: MaybeUninit::new(ManuallyDrop::new(())),
