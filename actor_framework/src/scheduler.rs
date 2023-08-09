@@ -37,7 +37,9 @@ impl<ActorNames> Scheduler<ActorNames> where
 
         // Calculate initial priority queue
         for id in ActorNames::iter() {
-            scheduler.queue_add(id);
+            if scheduler.get_time(id) != Time::MAX {
+                scheduler.queue_add(id);
+            }
         }
         assert!(scheduler.queue_head.is_some(), "No schedulable actors found");
 
@@ -51,11 +53,9 @@ impl<ActorNames> Scheduler<ActorNames> where
         let mut limit = Time::MAX;
 
         // PERF: I'm hoping this should compile down into SIMD optimized branchless code
-        //       But that might require moving away from trait objects
+        //       but currently it compiles down to a chain of conditional-moves
         for actor_id in ActorNames::iter() {
-            let actor = self.actors.get_base(actor_id);
-
-            let time = actor.outbox.time.lower_bound();
+            let time = self.get_time(actor_id).lower_bound();
             if time < min {
                 (limit, min, min_actor) = (min, time, actor_id);
             } else {
@@ -108,6 +108,7 @@ impl<ActorNames> Scheduler<ActorNames> where
                     // There are multiple messages scheduled to be delivered on the same cycle.
                     // And one of the receivers couldn't deal with the zero limit message, so we switch
                     // to a more complex scheduler until the current cycle finishes.
+                    self.zero_limit_count += 1;
                     //if let Some(exit_reason) = self.run_zero_limit(time, limit) {
                     //    return exit_reason;
                     //}
@@ -126,7 +127,6 @@ impl<ActorNames> Scheduler<ActorNames> where
 
         // We might need to go though multiple iterations before this settles
         for _ in 0..(ActorNames::COUNT * 3) {
-            self.zero_limit_count += 1;
             for actor in ActorNames::iter() {
                 let message = self.actors.get_base(actor);
 
@@ -164,20 +164,35 @@ impl<ActorNames> Scheduler<ActorNames> where
     fn queue_add(&mut self, id: ActorNames) {
         let time = self.get_time(id).lower_bound();
 
-        if time == Time::MAX {
-            return;
+        let mut next;
+        let mut prev_id;
+
+        match self.queue_head {
+            None => {
+                self.queue_head = Some(id);
+                self.queue[id].prev = None;
+                self.queue[id].next = None;
+                return;
+            },
+            Some(next_id) => {
+                if self.get_time(next_id).lower_bound() > time {
+                    self.queue_head = Some(id);
+                    self.queue[id].prev = None;
+                    self.queue[id].next = Some(next_id);
+                    self.queue[next_id].prev = Some(id);
+                    return;
+                } else {
+                    next = self.queue[next_id].next;
+                    prev_id = next_id;
+                }
+            }
         }
 
-        let mut next = self.queue_head;
-        let mut prev: Option<ActorNames> = None;
         loop {
             match next {
                 None => {
-                    self.queue[id].prev = prev;
-                    match prev {
-                        None => self.queue_head = Some(id),
-                        Some(prev_id) => self.queue[prev_id].next = Some(id),
-                    }
+                    self.queue[id].prev = Some(prev_id);
+                    self.queue[prev_id].next = Some(id);
                     return;
                 }
                 Some(next_id) => {
@@ -185,16 +200,13 @@ impl<ActorNames> Scheduler<ActorNames> where
                     let next_actor = &mut self.queue[next_id];
                     if next_time <= time {
                         next = next_actor.next;
-                        prev = Some(next_id);
+                        prev_id = next_id;
                     } else {
-                        debug_assert!(next_actor.prev == prev, "{:?} != {:?}", next_actor.prev, prev);
+                        debug_assert!(next_actor.prev == Some(prev_id), "{:?} != {:?}", next_actor.prev, prev_id);
                         next_actor.prev = Some(id);
-                        match prev {
-                            None => self.queue_head = Some(id),
-                            Some(prev_id) => self.queue[prev_id].next = Some(id),
-                        }
+                        self.queue[prev_id].next = Some(id);
                         self.queue[id].next = Some(next_id);
-                        self.queue[id].prev = prev;
+                        self.queue[id].prev = Some(prev_id);
                         return;
                     }
                 }
@@ -285,9 +297,10 @@ impl<ActorNames> Scheduler<ActorNames> where
                 // Receiver already had a message queued
                 self.queue_remove(Receiver::name());
             }
-            // Normally, this means the Receiver has a new message
-            // But queue_add also handles the rare case where there is no message
-            self.queue_add(Receiver::name());
+            if after != Time::MAX {
+                // Receiver has a message queued
+                self.queue_add(Receiver::name());
+            }
         }
 
         result
@@ -303,8 +316,9 @@ impl<ActorNames> Scheduler<ActorNames> where
         //       We should make sure the compiler optimizes this case
         let before = actor.outbox.time();
         actor.obj.message_delivered(&mut actor.outbox, time);
+        let after = actor.outbox.time();
 
-        if before != actor.outbox.time() {
+        if before != after && after != Time::MAX {
             // The Sender send another message, add the Sender back to the queue
             self.queue_add(Sender::name());
         }
