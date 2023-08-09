@@ -83,6 +83,7 @@ impl Ord for BusRequest {
 }
 
 impl Handler<N64Actors, BusRequest> for BusActor {
+    #[inline(always)]
     fn recv(&mut self, outbox: &mut BusOutbox, message: BusRequest, time: Time, _limit: Time) -> SchedulerResult {
         if self.queue.is_empty() && self.commited_time < time {
             // There are no outstanding requests, so we can just accept this one
@@ -114,6 +115,7 @@ impl Handler<N64Actors, BusRequest> for BusActor {
 impl Actor<N64Actors> for BusActor {
     type OutboxType = BusOutbox;
 
+    #[inline(always)]
     fn message_delivered(&mut self, outbox: &mut BusOutbox, _time: Time) {
         let request = self.queue.pop().unwrap();
         // Increment time to end of delivered request

@@ -159,6 +159,7 @@ impl Handler<N64Actors, CpuRegRead> for PiActor {
 }
 
 impl Handler<N64Actors, PiRead> for PiActor {
+    #[inline(always)]
     fn recv(&mut self, outbox: &mut PiOutbox, message: PiRead, time: Time, _limit: Time) -> SchedulerResult {
         if message.cart_addr & 0x3 != 0 {
             panic!("unaligned PI read {:#010x}", message.cart_addr)

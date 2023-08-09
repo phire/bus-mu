@@ -41,6 +41,7 @@ actor_framework::make_outbox!(
 impl Actor<N64Actors> for SiActor {
     type OutboxType = SiOutbox;
 
+    #[inline(always)]
     fn message_delivered(&mut self, outbox: &mut SiOutbox, time: Time) {
         if let Some((msg_time, message)) = self.queued_message.take() {
             println!("Si: sending queued message {:?} to time {} at {}", message, u64::from(msg_time), time);
@@ -73,6 +74,7 @@ impl SiActor {
 }
 
 impl Handler<N64Actors, CpuRegRead> for SiActor {
+    #[inline(always)]
     fn recv(&mut self, outbox: &mut SiOutbox, message: CpuRegRead, time: Time, _: Time) -> SchedulerResult {
         let address = message.address;
         match address {

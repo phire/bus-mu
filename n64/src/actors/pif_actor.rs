@@ -28,6 +28,7 @@ make_outbox!(
 impl Actor<N64Actors> for PifActor {
     type OutboxType = PifOutbox;
 
+    #[inline(always)]
     fn message_delivered(&mut self, outbox: &mut PifOutbox, _: Time) {
         let time = self.pif_time;
         outbox.send::<Self>(PifHleMain{}, time);
@@ -261,6 +262,7 @@ impl pif::PifIO for PifHleIoProxy<'_> {
 struct PifHleMain {}
 
 impl Handler<N64Actors, PifHleMain> for PifActor {
+    #[inline(always)]
     fn recv(&mut self, _outbox: &mut PifOutbox,  _: PifHleMain, time: Time, _: Time) -> SchedulerResult {
         let (pif_core, mut io) = PifHleIoProxy::split(self);
 

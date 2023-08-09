@@ -246,6 +246,7 @@ impl ActorCreate<N64Actors> for CpuActor {
 }
 
 impl Handler<N64Actors, ReadFinished> for CpuActor {
+    #[inline(always)]
     fn recv(&mut self, outbox: &mut CpuOutbox, message: ReadFinished, time: Time, limit: Time) -> SchedulerResult {
         self.recursion = 0; // Reset recursion
 
@@ -273,6 +274,7 @@ impl Handler<N64Actors, ReadFinished> for CpuActor {
 }
 
 impl Handler<N64Actors, WriteFinished> for CpuActor {
+    #[inline(always)]
     fn recv(&mut self, outbox: &mut CpuOutbox, message: WriteFinished, time: Time, limit: Time) -> SchedulerResult {
         self.recursion = 0; // Reset recursion
 
@@ -290,6 +292,7 @@ impl Handler<N64Actors, WriteFinished> for CpuActor {
 }
 
 impl Handler<N64Actors, CpuRun> for CpuActor {
+    #[inline(always)]
     fn recv(&mut self, outbox: &mut CpuOutbox, msg: CpuRun, time: Time, limit: Time) -> SchedulerResult {
         debug_assert!(time == self.committed_time);
         if time == limit {
