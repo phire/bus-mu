@@ -3,7 +3,7 @@ use std::time::Instant;
 
 fn main() {
     // use multiple runs for stable benchmarks
-    let loops = 1;
+    let loops = 10;
     for _ in 0..loops {
         let start = Instant::now();
 

@@ -7,4 +7,5 @@ edition = "2021"
 
 [dependencies]
 modular-bitfield = "0.11.2"
-actor_framework = { path = "../actor_framework" }
+#actor_framework = { path = "../actor_framework",  features = ["linked_list"] }
+actor_framework = { path = "../actor_framework",  features = ["branchless"] }

@@ -73,29 +73,20 @@ impl<ActorNames> Scheduler<ActorNames> where
         (execute_fn)(sender_id, self, limit)
     }
 
+    #[cfg(feature = "branchless")]
+    fn take_next(&mut self) -> (ActorNames, Time, Time) {
+        self.find_next()
+    }
+
+    #[cfg(feature = "linked_list")]
+    fn take_next(&mut self) -> (ActorNames, Time, Time) {
+        self.queue_pop()
+    }
+
     #[inline(never)]
     pub fn run(&mut self) -> Box<dyn std::error::Error> {
         loop {
-            //self.validate_queue();
-            //self.print_queue();
-
-            let sender_id = self.queue_head.take().expect("No schedulable actors found");
-            let next = {
-                let sender = &mut self.queue[sender_id];
-                debug_assert!(sender.prev.is_none(),
-                    "{:?}'s prev should be None, but is {:?}", sender_id, sender.prev);
-                sender.next.take()
-            };
-
-            let limit = match next {
-                Some(next_id) => {
-                    debug_assert!(next_id != sender_id);
-                    self.queue_head = Some(next_id);
-                    self.queue[next_id].prev = None;
-                    self.get_time(next_id).lower_bound()
-                },
-                None => Time::MAX,
-            };
+            let (sender_id, time, limit) = self.take_next();
 
             // println!("Running actor {:?}. Next is {:?} @ {}", sender_id, next, limit);
 
@@ -104,15 +95,17 @@ impl<ActorNames> Scheduler<ActorNames> where
                     // Hot path
                     continue;
                 },
-                SchedulerResult::ZeroLimit => {
+                SchedulerResult::ZeroLimit if cfg!(feature = "branchless") => {
                     // There are multiple messages scheduled to be delivered on the same cycle.
                     // And one of the receivers couldn't deal with the zero limit message, so we switch
                     // to a more complex scheduler until the current cycle finishes.
                     self.zero_limit_count += 1;
-                    //if let Some(exit_reason) = self.run_zero_limit(time, limit) {
-                    //    return exit_reason;
-                    //}
-                    continue;
+                    if let Some(exit_reason) = self.run_zero_limit(time, limit) {
+                        return exit_reason;
+                    }
+                },
+                SchedulerResult::ZeroLimit => {
+                    self.zero_limit_count += 1;
                 },
                 SchedulerResult::Exit(reason) => {
                     return reason;
@@ -160,6 +153,27 @@ struct QueueEntry<ActorNames> where
 impl<ActorNames> Scheduler<ActorNames> where
     ActorNames: MakeNamed,
 {
+    fn queue_pop(&mut self) -> (ActorNames, Time, Time) {
+        let sender_id = self.queue_head.take().expect("No schedulable actors found");
+        let next = {
+            let sender = &mut self.queue[sender_id];
+            debug_assert!(sender.prev.is_none(),
+                "{:?}'s prev should be None, but is {:?}", sender_id, sender.prev);
+            sender.next.take()
+        };
+
+        let limit = match next {
+            Some(next_id) => {
+                debug_assert!(next_id != sender_id);
+                self.queue_head = Some(next_id);
+                self.queue[next_id].prev = None;
+                self.get_time(next_id).lower_bound()
+            },
+            None => Time::MAX,
+        };
+        return (sender_id, self.get_time(sender_id), limit);
+    }
+
     #[inline(never)]
     fn queue_add(&mut self, id: ActorNames) {
         let time = self.get_time(id).lower_bound();
@@ -292,7 +306,7 @@ impl<ActorNames> Scheduler<ActorNames> where
         let result = actor.obj.recv(&mut actor.outbox, msg, time, limit);
         let after = actor.outbox.time();
 
-        if before != after {
+        if cfg!(feature = "linked_list") && before != after {
             if sender_id != Receiver::name() && before != Time::MAX {
                 // Receiver already had a message queued
                 self.queue_remove(Receiver::name());
@@ -318,7 +332,7 @@ impl<ActorNames> Scheduler<ActorNames> where
         actor.obj.message_delivered(&mut actor.outbox, time);
         let after = actor.outbox.time();
 
-        if before != after && after != Time::MAX {
+        if cfg!(feature = "linked_list") && before != after && after != Time::MAX {
             // The Sender send another message, add the Sender back to the queue
             self.queue_add(Sender::name());
         }

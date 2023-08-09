@@ -5,5 +5,9 @@ edition = "2021"
 
 [lib]
 
+[features]
+branchless = []
+linked_list = []
+
 [dependencies]
 named-derive = { version = "0.1.0", path = "named-derive" }

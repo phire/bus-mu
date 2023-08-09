@@ -32,7 +32,7 @@ actor_framework::make_outbox!(
     }
 );
 
-const RECURSION_LIMIT: u32 = 100;
+const RECURSION_LIMIT: u32 = 0;// FIXME, only for benchmarking
 
 struct CpuRun {}
 
