@@ -45,6 +45,7 @@ const fn piority(actor: N64Actors) -> u16 {
         N64Actors::PiActor => 2,
         N64Actors::CpuActor => 1,
         N64Actors::BusActor | N64Actors::PifActor => {debug_assert!(false); 0}, // shouldn't happen
+        _ => { debug_assert!(false); 0 } // shouldn't happen
     }
 }
 

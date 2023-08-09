@@ -92,7 +92,7 @@ macro_rules! make_outbox {
             ActorNames: actor_framework::MakeNamed,
         {
             type Sender = $sender;
-            fn time(&self) -> Time {
+            fn time(&self) -> actor_framework::Time {
                 unsafe { self.none.time }
             }
             // fn as_proxy<'a>(&'a mut self) -> &'a mut actor_framework::MessagePacketProxy<ActorNames> {
@@ -126,9 +126,9 @@ macro_rules! make_outbox {
             $name_type: actor_framework::MakeNamed,
         {
             #[inline(always)]
-            fn send<Receiver>(&mut self, message: $field_type, time: Time)
+            fn send<Receiver>(&mut self, message: $field_type, time: actor_framework::Time)
             where
-                Receiver: Handler<$name_type, $field_type> + Actor<$name_type>
+                Receiver: actor_framework::Handler<$name_type, $field_type> + actor_framework::Actor<$name_type>
             {
                 assert!(self.is_empty());
 
@@ -138,9 +138,9 @@ macro_rules! make_outbox {
             }
 
             #[inline(always)]
-            fn send_channel<Sender>(&mut self, channel: actor_framework::Channel<$name_type, Sender, $field_type>, message: $field_type, time: Time)
+            fn send_channel<Sender>(&mut self, channel: actor_framework::Channel<$name_type, Sender, $field_type>, message: $field_type, time: actor_framework::Time)
             where
-                Sender: Actor<$name_type>,
+                Sender: actor_framework::Actor<$name_type>,
                 Self: actor_framework::Outbox<$name_type, Sender=Sender>,
             {
                 assert!(self.is_empty());
@@ -150,7 +150,7 @@ macro_rules! make_outbox {
             }
 
             #[inline(always)]
-            fn send_endpoint(&mut self, endpoint: actor_framework::Endpoint<$name_type, $field_type>, message: $field_type, time: Time)
+            fn send_endpoint(&mut self, endpoint: actor_framework::Endpoint<$name_type, $field_type>, message: $field_type, time: actor_framework::Time)
             {
                 assert!(self.is_empty());
 
@@ -161,7 +161,7 @@ macro_rules! make_outbox {
             }
 
             #[inline(always)]
-            fn cancel(&mut self) -> (Time, $field_type)
+            fn cancel(&mut self) -> (actor_framework::Time, $field_type)
             {
                 let msg_type = unsafe { self.none.msg_type() };
                 if msg_type == std::any::TypeId::of::<$field_type>() {
