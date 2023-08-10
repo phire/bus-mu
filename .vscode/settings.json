@@ -1,0 +1,14 @@
+{
+    "spellright.language": [
+        "en"
+    ],
+    "spellright.documentTypes": [
+        "markdown",
+        "latex",
+        "plaintext",
+        "rust"
+    ],
+    "rust-analyzer.linkedProjects": [
+        "./actor_framework/Cargo.toml",
+    ]
+}
