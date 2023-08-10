@@ -401,6 +401,83 @@ impl<ActorNames> Scheduler<ActorNames> where
         }
     }
 
+    /// This combines both a queue_remove and queue_add into a single operation
+    /// TODO: PERF: I'm really not sure if this is a good idea or not
+    #[inline(never)]
+    #[allow(dead_code)]
+    fn queue_readd(&mut self, id: ActorNames, time: Time) {
+        debug_assert!(time == self.get_time(id), "Time mismatch");
+        self.count_queue_adds += 1;
+        self.count_queue_add_complexity += 1;
+
+        let mut next;
+        let mut prev_id;
+
+        // Because we are re-adding, we know the queue has at least one actor in it
+        debug_assert!(self.queue_head.is_some());
+        if self.queue_head == Some(id) {
+            match self.queue[id].next {
+                Some(next_id) if self.get_time(next_id).lower_bound() > time => { return; },
+                None => { return; },
+                Some(next_id) => {
+                    self.queue_head = Some(next_id);
+                    next = self.queue[next_id].next;
+                    self.queue[next_id].next = None;
+                    prev_id = next_id;
+                }
+            }
+        } else {
+            debug_assert!(self.queue[id].prev.is_some());
+            // Remove from current position in list.
+            {
+                // Safety: in a valid linked list, prev will always be some here.
+                let prev_id = unsafe { self.queue[id].prev.unwrap_unchecked() };
+                self.queue[prev_id].next = self.queue[id].next;
+                self.queue[id].next.map(|next_id| self.queue[next_id].prev = Some(prev_id));
+                self.queue[id].next = None;
+            }
+
+            // Safety: in a valid linked list, head will always be some here
+            let next_id = unsafe { self.queue_head.unwrap_unchecked() };
+
+            if self.get_time(next_id).lower_bound() > time {
+                // We can insert at the front
+                self.queue[id].next = Some(next_id);
+                self.queue[id].prev = None;
+                self.queue_head = Some(id);
+                return;
+            }
+            prev_id = next_id;
+            next = self.queue[next_id].next;
+        }
+
+        loop {
+            self.count_queue_add_complexity += 1;
+            match next {
+                None => {
+                    self.queue[id].prev = Some(prev_id);
+                    self.queue[prev_id].next = Some(id);
+                    return;
+                }
+                Some(next_id) => {
+                    let next_time = self.get_time(next_id).lower_bound();
+                    let next_actor = &mut self.queue[next_id];
+                    if next_time <= time {
+                        next = next_actor.next;
+                        prev_id = next_id;
+                    } else {
+                        debug_assert!(next_actor.prev == Some(prev_id), "{:?} != {:?}", next_actor.prev, prev_id);
+                        next_actor.prev = Some(id);
+                        self.queue[prev_id].next = Some(id);
+                        self.queue[id].next = Some(next_id);
+                        self.queue[id].prev = Some(prev_id);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     fn queue_remove(&mut self, actor_id: ActorNames) {
         self.count_queue_removes += 1;
         let mut entry = QueueEntry {
@@ -506,12 +583,12 @@ impl<ActorNames> Scheduler<ActorNames> where
                 }
             }
 
-            let empty_slot = if before_delivered != after_delivered {
+            let empty_slot = if before_delivered == after_delivered {
                 Some(self.is_cached[Sender::name()] as usize)
             } else {
                 if cfg!(feature = "updating_cache") && after_delivered > self.cache_limit {
                     // Sender needs to leave the cache
-                    Some(self.cache_remove(Sender::name(), time))
+                    Some(self.cache_remove(Sender::name(), after_delivered))
                 } else {
                     None
                 }
@@ -540,20 +617,21 @@ impl<ActorNames> Scheduler<ActorNames> where
             }
         }
         else if cfg!(feature = "linked_list") {
-            if before != after && before != Time::MAX {
-                // Receiver already had a message queued, but it's replacing it
-                self.queue_remove(Receiver::name());
+            if before != after {
+                if before != Time::MAX {
+                    self.queue_remove(Receiver::name());
+                }
+                if after != Time::MAX {
+                    self.queue_add(Receiver::name(), after);
+                }
             }
+
             // PERF: before_delivered will always be Time::MAX (because of take_message) so we could
             //       use `after_delivered != Time::MAX`, but llvm doesn't seem to detect that as dead
             //       code, so this generally produces better code
             if before_delivered != after_delivered {
                 debug_assert!(after_delivered != Time::MAX);
                 self.queue_add(Sender::name(), after_delivered);
-            }
-            if before != after && after != Time::MAX {
-                // Receiver has a message queued
-                self.queue_add(Receiver::name(), after);
             }
         }
 
