@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use crate::{ActorBox, Actor, AsBase};
 
 pub trait Named<E> {
-    fn name() -> E where Self: Sized;
+    fn name() -> E;
     fn dyn_name(&self) -> E;
     fn from_storage<'a, 'b>(storage: &'a mut E::StorageType) -> &'b mut ActorBox<E, Self>
     where
@@ -19,6 +19,7 @@ where
     Self::StorageType: Default + AsBase<Self>,
 {
     const COUNT: usize;
+    const TERMINAL: Self; // Scheduler uses this as an actor that never get scheduled
     type Base<A> where A: Actor<Self>, Self: Sized;
     type ExitReason = Box<dyn std::error::Error>;
     type StorageType;

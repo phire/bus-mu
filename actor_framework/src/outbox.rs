@@ -36,14 +36,14 @@ macro_rules! make_outbox {
         $name:ident<$name_type:ty, $sender:ty>
         {
             // match One or more fields of `name: MessageType,`
-            $( $i:ident : $t:ty ),+
+            $( $field_ident:ident : $field_type:ty ),*
             // match optional trailing commas
             $(,)?
         }
     ) => {
         pub union $name {
             none: core::mem::ManuallyDrop<actor_framework::MessagePacket<$name_type, ()>>,
-            $($i : core::mem::ManuallyDrop<actor_framework::MessagePacket<$name_type, $t>>),+
+            $($field_ident : core::mem::ManuallyDrop<actor_framework::MessagePacket<$name_type, $field_type>>),*
         }
 
         impl $name {
@@ -59,9 +59,9 @@ macro_rules! make_outbox {
                 if msg_type == std::any::TypeId::of::<()>() {
                     "Empty"
                 }
-                $(else if msg_type == std::any::TypeId::of::<$t>() {
-                    std::any::type_name::<$t>()
-                })+
+                $(else if msg_type == std::any::TypeId::of::<$field_type>() {
+                    std::any::type_name::<$field_type>()
+                })*
                 else {
                     unreachable!()
                 }
@@ -81,9 +81,9 @@ macro_rules! make_outbox {
                 if msg_type == std::any::TypeId::of::<()>() {
                     unsafe { core::mem::ManuallyDrop::drop( &mut self.none) };
                 }
-                $(else if msg_type == std::any::TypeId::of::<$t>() {
-                    unsafe { core::mem::ManuallyDrop::drop( &mut self.$i) };
-                })+
+                $(else if msg_type == std::any::TypeId::of::<$field_type>() {
+                    unsafe { core::mem::ManuallyDrop::drop( &mut self.$field_ident) };
+                })*
             }
         }
 
@@ -109,87 +109,72 @@ macro_rules! make_outbox {
         }
 
         // Create all OutboxSend<MessageType> traits
-        actor_framework::make_outbox!(@impl $name<$name_type>, $($i : $t),+ );
-    };
-    // Called for every union field to implement an OutboxSend<MessageType> trait
-    (
-
-        // match macro internal @impl tag
-        @impl
-        // match OutboxName<ActorNames>,
-        $name:ident<$name_type:ty>,
-        // match exactly one field of `name: MessageType`
-        $field_ident:ident : $field_type:ty
-    ) => {
-        impl actor_framework::OutboxSend<$name_type, $field_type> for $name
-        where
-            $name_type: actor_framework::MakeNamed,
-        {
-            #[inline(always)]
-            fn send<Receiver>(&mut self, message: $field_type, time: actor_framework::Time)
+        $(
+            impl actor_framework::OutboxSend<$name_type, $field_type> for $name
             where
-                Receiver: actor_framework::Handler<$name_type, $field_type> + actor_framework::Actor<$name_type>
+                $name_type: actor_framework::MakeNamed,
             {
-                assert!(self.is_empty());
+                #[inline(always)]
+                fn send<Receiver>(&mut self, message: $field_type, time: actor_framework::Time)
+                where
+                    Receiver: actor_framework::Handler<$name_type, $field_type> + actor_framework::Actor<$name_type>
+                {
+                    assert!(self.is_empty());
 
-                self.$field_ident = core::mem::ManuallyDrop::new(actor_framework::MessagePacket::new::<
-                    <Self as actor_framework::Outbox<$name_type>>::Sender,
-                    Receiver>(time, message));
-            }
+                    self.$field_ident = core::mem::ManuallyDrop::new(actor_framework::MessagePacket::new::<
+                        <Self as actor_framework::Outbox<$name_type>>::Sender,
+                        Receiver>(time, message));
+                }
 
-            #[inline(always)]
-            fn send_channel<Sender>(&mut self, channel: actor_framework::Channel<$name_type, Sender, $field_type>, message: $field_type, time: actor_framework::Time)
-            where
-                Sender: actor_framework::Actor<$name_type>,
-                Self: actor_framework::Outbox<$name_type, Sender=Sender>,
-            {
-                assert!(self.is_empty());
+                #[inline(always)]
+                fn send_channel<Sender>(&mut self, channel: actor_framework::Channel<$name_type, Sender, $field_type>, message: $field_type, time: actor_framework::Time)
+                where
+                    Sender: actor_framework::Actor<$name_type>,
+                    Self: actor_framework::Outbox<$name_type, Sender=Sender>,
+                {
+                    assert!(self.is_empty());
 
-                self.$field_ident = core::mem::ManuallyDrop::new(
-                    actor_framework::MessagePacket::from_channel(channel, message, time));
-            }
+                    self.$field_ident = core::mem::ManuallyDrop::new(
+                        actor_framework::MessagePacket::from_channel(channel, message, time));
+                }
 
-            #[inline(always)]
-            fn send_endpoint(&mut self, endpoint: actor_framework::Endpoint<$name_type, $field_type>, message: $field_type, time: actor_framework::Time)
-            {
-                assert!(self.is_empty());
+                #[inline(always)]
+                fn send_endpoint(&mut self, endpoint: actor_framework::Endpoint<$name_type, $field_type>, message: $field_type, time: actor_framework::Time)
+                {
+                    assert!(self.is_empty());
 
-                self.$field_ident = core::mem::ManuallyDrop::new(
-                        actor_framework::MessagePacket::from_endpoint::<
-                            <Self as actor_framework::Outbox<$name_type>>::Sender>
-                    (endpoint, time, message));
-            }
+                    self.$field_ident = core::mem::ManuallyDrop::new(
+                            actor_framework::MessagePacket::from_endpoint::<
+                                <Self as actor_framework::Outbox<$name_type>>::Sender>
+                        (endpoint, time, message));
+                }
 
-            #[inline(always)]
-            fn cancel(&mut self) -> (actor_framework::Time, $field_type)
-            {
-                let msg_type = unsafe { self.none.msg_type() };
-                if msg_type == std::any::TypeId::of::<$field_type>() {
-                    unsafe {
-                        return self.$field_ident.take().unwrap_unchecked();
+                #[inline(always)]
+                fn cancel(&mut self) -> (actor_framework::Time, $field_type)
+                {
+                    let msg_type = unsafe { self.none.msg_type() };
+                    if msg_type == std::any::TypeId::of::<$field_type>() {
+                        unsafe {
+                            return self.$field_ident.take().unwrap_unchecked();
+                        }
+                    } else {
+                        let typename = std::any::type_name::<$field_type>();
+                        panic!("Outbox::cancel - Expected {} but found {:?}", typename, msg_type);
                     }
-                } else {
-                    let typename = std::any::type_name::<$field_type>();
-                    panic!("Outbox::cancel - Expected {} but found {:?}", typename, msg_type);
+                }
+
+                #[inline(always)]
+                fn as_packet<'a>(&'a mut self) -> Option<&'a mut actor_framework::MessagePacket<$name_type, $field_type>> {
+                    let msg_type = unsafe { self.none.msg_type() };
+                    if msg_type == std::any::TypeId::of::<$field_type>() {
+                        unsafe {
+                            return Some(&mut self.$field_ident);
+                        }
+                    } else {
+                        return None;
+                    }
                 }
             }
-
-            #[inline(always)]
-            fn as_packet<'a>(&'a mut self) -> Option<&'a mut actor_framework::MessagePacket<$name_type, $field_type>> {
-                let msg_type = unsafe { self.none.msg_type() };
-                if msg_type == std::any::TypeId::of::<$field_type>() {
-                    unsafe {
-                        return Some(&mut self.$field_ident);
-                    }
-                } else {
-                    return None;
-                }
-            }
-        }
-    };
-    // Call above rule for every field
-    (@impl $name:ident<$name_type:ty>, $i:ident : $t:ty, $($tail:tt)+) => {
-        actor_framework::make_outbox!(@impl $name<$name_type>, $i : $t);
-        actor_framework::make_outbox!(@impl $name<$name_type>, $($tail)+);
+        )*
     };
 }

@@ -42,7 +42,7 @@ impl<E> ObjectStore<E> where
     }
 
     #[inline(always)]
-    pub fn get_base<'a>(&'a mut self, id: E) -> &'a mut ActorBoxBase<E>
+    pub fn get_base<'a>(&'a self, id: E) -> &'a ActorBoxBase<E>
     where
         E::StorageType: AsBase<E>,
     {

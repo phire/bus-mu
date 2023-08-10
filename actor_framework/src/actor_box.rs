@@ -40,5 +40,5 @@ pub trait AsBase<ActorNames>
 where
     ActorNames: MakeNamed,
 {
-    fn as_base<'a>(&'a mut self, id: ActorNames) -> &'a mut ActorBoxBase<ActorNames>;
+    fn as_base<'a>(&'a self, id: ActorNames) -> &'a ActorBoxBase<ActorNames>;
 }

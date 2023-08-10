@@ -1,7 +1,37 @@
 
+use std::usize;
+
 use crate::{object_map::{ObjectStore, ObjectStoreView}, Time, MakeNamed, Actor, MessagePacket, OutboxSend, Handler, Outbox, EnumMap};
 
-const CACHE_SIZE: usize = 4;
+// PERF: TODO:
+// This is currently a bit of a mess. It implements four different scheduling algorithms.
+//
+//  - Branchless uses a chain of conditional moves to select the next actor without any branches
+//    Problem is that it's complexity grows with total actors, even if the actors do nothing
+//  - linked-list uses a double-linked list
+//  - cached combines the two above two, using branchless to select between a fixed set of
+//    active actors and falling back to the linked list
+//  - updatding_cache is cached, except it continually updates the cache as actors are executed
+//    so the cache always returns a valid result
+//
+//  Unfortunately, I had to abandon optimization efforts because my n64 implementation didn't
+//  generate complex enough workloads. I'll need to come back once I have multiple cores all
+//  access main memory and causing bus conflicts.
+//
+//  When only the CPU is running:
+//   - linked list is the fastest, as messages get inserted at the front of the queue 99.9% of the time
+//   - cached with CACHE_SIZE = 2 is slightly slower
+//   - updating_cache is slightly slower again
+//   - branchless is the slowest, especially as the number of actors gets larger
+//
+//  I'm expecting that cached might be faster on more complex workloads... though need to test
+//
+//  Other optimization ideas:
+//     Don't access time (and execute_fn?) via indirect loads to the outbox.
+//     Instead, we should actually copy those out of the outbox and into the linked list queue or cache
+//     Should make both find_next_cached and queue_add faster, and allow us to remove some stupid unsafe code
+
+const CACHE_SIZE: usize = 2;
 const UNCACHED: u8 = CACHE_SIZE as u8;
 
 pub struct Scheduler<ActorNames> where
@@ -11,12 +41,13 @@ pub struct Scheduler<ActorNames> where
     queue: EnumMap<QueueEntry<ActorNames>, ActorNames>,
     queue_head: Option<ActorNames>,
     is_cached: EnumMap<u8, ActorNames>,
-    cached: [Option<ActorNames>; CACHE_SIZE],
+    cached: [ActorNames; CACHE_SIZE],
     cache_limit: Time,
-    cache_valid: bool,
+    num_cache_entries: u8,
     count: u64,
-    count_fills: u64,
+    count_cache_inserts: u64,
     count_queue_adds: u64,
+    count_queue_removes: u64,
     count_queue_add_complexity: u64,
     zero_limit_count: u64,
 }
@@ -29,16 +60,17 @@ where
     fn drop(&mut self) {
         eprintln!("Scheduler ran {} times", self.count);
         eprintln!(" with {} zero limits", self.zero_limit_count);
-        eprintln!(" {} cache fills", self.count_fills);
+        eprintln!(" {} cache inserts", self.count_cache_inserts);
         let complexity = self.count_queue_add_complexity as f64 / self.count_queue_adds as f64;
         eprintln!(" {} queue adds, complexity {}", self.count_queue_adds, complexity);
+        eprintln!(" {} queue removes", self.count_queue_removes);
     }
 }
-
 
 impl<ActorNames> Scheduler<ActorNames> where
     ActorNames: MakeNamed,
  {
+    const EMPTY_CACHE: ActorNames = ActorNames::TERMINAL;
 
     pub fn new() -> Scheduler<ActorNames> {
         let mut scheduler = Scheduler {
@@ -46,12 +78,13 @@ impl<ActorNames> Scheduler<ActorNames> where
             queue: EnumMap::from_fn(|_| QueueEntry { next: None, prev: None }),
             queue_head: None,
             is_cached: EnumMap::from_fn(|_| UNCACHED),
-            cached: [None; CACHE_SIZE],
+            cached: [Self::EMPTY_CACHE; CACHE_SIZE],
             cache_limit: Time::MAX,
-            cache_valid: false,
+            num_cache_entries: 0,
             count: 0,
-            count_fills: 0,
+            count_cache_inserts: 0,
             count_queue_adds: 0,
+            count_queue_removes: 0,
             count_queue_add_complexity: 0,
             zero_limit_count: 0,
         };
@@ -60,16 +93,32 @@ impl<ActorNames> Scheduler<ActorNames> where
 
         // Calculate initial priority queue
         for id in ActorNames::iter() {
-            if scheduler.get_time(id) != Time::MAX {
-                scheduler.queue_add(id);
+            let time = scheduler.get_time(id);
+            if time != Time::MAX {
+                scheduler.queue_add(id, time);
             }
         }
         assert!(scheduler.queue_head.is_some(), "No schedulable actors found");
 
+        if cfg!(feature = "cached") {
+            scheduler.cached = std::array::from_fn(|idx| {
+                let (id, _, limit) = scheduler.queue_pop();
+                if let Some(id) = id {
+                    scheduler.cache_limit = limit;
+                    scheduler.is_cached[id] = idx as u8;
+                    scheduler.num_cache_entries += 1;
+                    id
+                } else {
+                    Self::EMPTY_CACHE
+                }
+            });
+        }
+
         scheduler
     }
 
-    fn find_next(&mut self) -> (Option<ActorNames>, Time, Time) {
+    #[cfg(feature = "branchless")]
+    fn take_next(&mut self) -> (ActorNames, Time, Time) {
         let mut min = Time::MAX;
         let mut min_actor = 0.into();
         let mut limit = Time::MAX;
@@ -84,52 +133,88 @@ impl<ActorNames> Scheduler<ActorNames> where
             }
         }
         debug_assert!(min != Time::MAX);
-        return (Some(min_actor), min, limit)
+        return (min_actor, min, limit)
     }
 
+    #[allow(dead_code)]
     fn find_next_cached(&mut self) -> (Option<ActorNames>, Time, Time) {
         let mut min = self.cache_limit;
         let mut min_actor: Option<ActorNames> = None;
         let mut limit = Time::MAX;
 
+        // This compiles down to a chain of conditional-moves
         for actor_id in self.cached {
-            if let Some(actor_id) = actor_id {
-                let time = self.get_time(actor_id).lower_bound();
-                if time < min {
-                    (limit, min, min_actor) = (min, time, Some(actor_id));
-                } else {
-                    limit = std::cmp::min(limit, time);
-                }
+            let time = self.get_time(actor_id).lower_bound();
+            if time < min {
+                (limit, min, min_actor) = (min, time, Some(actor_id));
+            } else {
+                limit = std::cmp::min(limit, time);
             }
         }
         return (min_actor, min, limit)
     }
 
-    fn fill_cache(&mut self) {
-        self.count_fills += 1;
-        // put any cached actors back in queue
-        for actor_id in self.cached {
-            if let Some(actor_id) = actor_id {
-                self.is_cached[actor_id] = UNCACHED;
-                //debug_assert!(self.get_time(actor_id) != Time::MAX, "Actor {:?} is cached but has no time", actor_id);
-                if self.get_time(actor_id) != Time::MAX {
-                    self.queue_add(actor_id);
-                }
+    fn cache_remove(&mut self, id: ActorNames, time: Time) -> usize {
+        debug_assert!(self.is_cached[id] != UNCACHED, "Trying to uncache Actor {:?} that's not cached", id);
+        debug_assert!(time == self.get_time(id), "Time mismatch");
+        let cache_slot = self.is_cached[id] as usize;
+        self.cached[cache_slot] = Self::EMPTY_CACHE;
+        self.is_cached[id] = UNCACHED;
+        self.num_cache_entries -= 1;
+        if time != Time::MAX {
+            self.queue_add(id, time);
+        }
+        cache_slot
+    }
+
+    fn cache_replace(&mut self, slot: usize, id: ActorNames) {
+        match self.cached[slot] {
+            id if id == Self::EMPTY_CACHE => { },
+            replaced_id => {
+                let time = self.get_time(replaced_id);
+                debug_assert!(time == Time::MAX, "Trying to replace cached Actor that's scheduled");
+                self.is_cached[replaced_id] = UNCACHED;
+                self.num_cache_entries -= 1;
             }
         }
+        self.cached[slot] = id;
+        self.is_cached[id] = slot as u8;
+        self.num_cache_entries += 1;
+    }
 
-        // find the next CACHE_SIZE actors and put them in the cache
-        //let cached: [Option<ActorNames>; CACHE_SIZE] =
-        self.cached = std::array::from_fn(|idx| {
-            if self.queue_peek().is_none() {
-                return None;
-            }
-            let (id, _, limit) = self.queue_pop();
-            self.cache_limit = limit;
-            self.is_cached[id] = idx as u8;
-            Some(id)
-        });
-        self.cache_valid = true;
+    #[inline(never)]
+    fn cache_insert(&mut self, insert_id: ActorNames) {
+        if self.num_cache_entries as usize == CACHE_SIZE {
+            // cache is full, replace the entry with the highest time
+            self.cached.clone().iter()
+                .enumerate()
+                .max_by(|&(_, &a), &(_, &b)| {
+                    self.get_time(a).cmp(&self.get_time(b))
+                }
+                )
+                .and_then(|(slot, &max_id)| {
+                    self.is_cached[max_id] = UNCACHED;
+                    self.num_cache_entries -= 1;
+                    match self.get_time(max_id) {
+                        Time::MAX => { }
+                        time => self.queue_add(max_id, time)
+                    }
+                    Some(slot)
+                })
+        } else {
+            // There is at least one empty slot
+            self.cached.iter()
+                .enumerate()
+                .find_map(|(slot, id)| {
+                    if *id == Self::EMPTY_CACHE { Some(slot) } else { None }
+                })
+        }.map(|slot| {
+            self.cached[slot] = insert_id;
+            self.is_cached[insert_id] = slot as u8;
+            self.num_cache_entries += 1;
+            self.count_cache_inserts += 1;
+        })
+        .unwrap();
     }
 
     fn run_inner<'a>(&'a mut self, sender_id: ActorNames, limit: Time) -> SchedulerResult {
@@ -139,35 +224,34 @@ impl<ActorNames> Scheduler<ActorNames> where
         (execute_fn)(sender_id, self, limit)
     }
 
-    #[cfg(feature = "branchless")]
-    fn take_next(&mut self) -> (Option<ActorNames>, Time, Time) {
-        if cfg!(feature = "linked_list") {
-            if !self.cache_valid {
-                self.fill_cache();
-            }
-            self.find_next_cached()
+    #[cfg(feature = "cached")]
+    //#[inline(never)]
+    fn take_next(&mut self) -> (ActorNames, Time, Time) {
+        let (next, time, limit) = self.find_next_cached();
+        if cfg!(feature = "updating_cache") {
+            // The "updating_cache" fully updates the cache in `fn execute_message`
+            // to make it always return a valid result
+            (next.unwrap(), time, limit)
+        } else if next.is_some() && time != Time::MAX {
+            (next.unwrap(), time, limit)
         } else {
-            self.find_next()
+            let (next, time, limit) = self.queue_pop();
+            self.cache_insert(next.unwrap());
+            (next.unwrap(), time, limit)
         }
     }
 
-    #[cfg(all(feature = "linked_list", not(feature = "branchless")))]
-    fn take_next(&mut self) -> (Option<ActorNames>, Time, Time) {
-        self.queue_pop()
+    #[cfg(all(feature = "linked_list", not(feature = "cached")))]
+    fn take_next(&mut self) -> (ActorNames, Time, Time) {
+        let (next, time, limit) = self.queue_pop();
+        assert!(next.is_some() && time != Time::MAX, "next: {:?}, time: {:?}", next, time);
+        (next.unwrap(), time, limit)
     }
 
     #[inline(never)]
     pub fn run(&mut self) -> Box<dyn std::error::Error> {
         loop {
             let (sender_id, time, limit) = self.take_next();
-            let sender_id = match sender_id {
-                Some(id) => id,
-                None => {
-                    // refill cache
-                    self.cache_valid = false;
-                    continue;
-                }
-            };
             //println!("Running actor {:?}. Next @ {}", sender_id, limit);
 
             match self.run_inner(sender_id, limit) {
@@ -175,7 +259,7 @@ impl<ActorNames> Scheduler<ActorNames> where
                     // Hot path
                     continue;
                 },
-                SchedulerResult::ZeroLimit if cfg!(feature = "branchless") => {
+                SchedulerResult::ZeroLimit if cfg!(any(feature = "branchless", feature = "cached")) => {
                     // There are multiple messages scheduled to be delivered on the same cycle.
                     // And one of the receivers couldn't deal with the zero limit message, so we switch
                     // to a more complex scheduler until the current cycle finishes.
@@ -214,7 +298,7 @@ impl<ActorNames> Scheduler<ActorNames> where
                 }
             }
 
-            let (_, time, limit) = self.find_next();
+            let (_, time, limit) = self.take_next();
             if time != limit {
                 return None;
             }
@@ -233,8 +317,14 @@ struct QueueEntry<ActorNames> where
 impl<ActorNames> Scheduler<ActorNames> where
     ActorNames: MakeNamed,
 {
-    fn queue_pop(&mut self) -> (ActorNames, Time, Time) {
-        let sender_id = self.queue_head.take().expect("No schedulable actors found");
+    fn queue_pop(&mut self) -> (Option<ActorNames>, Time, Time) {
+        let sender_id = match self.queue_head.take() {
+            Some(id) => id,
+            None => {
+                return (None, Time::MAX, Time::MAX);
+            }
+        };
+
         let next = {
             let sender = &mut self.queue[sender_id];
             debug_assert!(sender.prev.is_none(),
@@ -251,7 +341,7 @@ impl<ActorNames> Scheduler<ActorNames> where
             },
             None => Time::MAX,
         };
-        return (sender_id, self.get_time(sender_id), limit);
+        return (Some(sender_id), self.get_time(sender_id), limit);
     }
 
     fn queue_peek(&self) -> Option<ActorNames> {
@@ -259,9 +349,8 @@ impl<ActorNames> Scheduler<ActorNames> where
     }
 
     #[inline(never)]
-    fn queue_add(&mut self, id: ActorNames) {
-        let time = self.get_time(id).lower_bound();
-
+    fn queue_add(&mut self, id: ActorNames, time: Time) {
+        debug_assert!(time == self.get_time(id), "Time mismatch");
         self.count_queue_adds += 1;
         self.count_queue_add_complexity += 1;
 
@@ -317,6 +406,7 @@ impl<ActorNames> Scheduler<ActorNames> where
     }
 
     fn queue_remove(&mut self, actor_id: ActorNames) {
+        self.count_queue_removes += 1;
         let mut entry = QueueEntry {
             next: None,
             prev: None,
@@ -371,7 +461,7 @@ impl<ActorNames> Scheduler<ActorNames> where
         }
     }
 
-    fn get_time(&mut self, id: ActorNames) -> Time {
+    fn get_time(&self, id: ActorNames) -> Time {
         self.actors.get_base(id).outbox.time
     }
 
@@ -385,77 +475,89 @@ impl<ActorNames> Scheduler<ActorNames> where
         actor.outbox.as_packet().and_then(|p| { p.take() })
     }
 
-    fn call_receiver<Receiver, Message>(&mut self, sender_id: ActorNames, msg: Message, time: Time, limit: Time) -> SchedulerResult
+    fn execute_message<Sender, Receiver, Message>(&mut self, msg: Message, time: Time, limit: Time) -> SchedulerResult
     where
+        Sender: Actor<ActorNames>,
         Receiver: Actor<ActorNames> + Handler<ActorNames, Message>,
     {
-        let actor = self.actors.get::<Receiver>();
-        let before = actor.outbox.time();
-        let result = actor.obj.recv(&mut actor.outbox, msg, time, limit);
-        let after = actor.outbox.time();
+        let receiver = self.actors.get::<Receiver>();
 
-        if cfg!(feature = "branchless") && self.is_cached[Receiver::name()] != UNCACHED {
-            if after >= self.cache_limit && after != Time::MAX {
-                // remove from cache
-                let cache_slot = self.is_cached[Receiver::name()] as usize;
-                self.cached[cache_slot] = None;
-                self.is_cached[Receiver::name()] = UNCACHED;
-                self.queue_add(Receiver::name());
+        let before = receiver.outbox.time();
+        let result = receiver.obj.recv(&mut receiver.outbox, msg, time, limit);
+        let after = receiver.outbox.time();
+
+        let sender = self.actors.get::<Sender>();
+        sender.obj.message_delivered(&mut sender.outbox, time);
+        let after_delivered = sender.outbox.time();
+
+        if cfg!(feature = "cached") {
+            if self.is_cached[Receiver::name()] != UNCACHED {
+                return result;
+            }
+            // First, make sure the queue is in a valid state
+            if before != after && self.is_cached[Receiver::name()] == UNCACHED && before != Time::MAX {
+                self.queue_remove(Receiver::name());
+
+                // receiver might have been the cache limit, so update it
+                if cfg!(feature = "updating_cache")  {
+                    self.cache_limit = match self.queue_head {
+                        Some(head_id) => self.get_time(head_id),
+                        None => Time::MAX,
+                    }
+                }
+            }
+
+            let empty_slot = if after_delivered == Time::MAX {
+                Some(self.is_cached[Sender::name()] as usize)
+            } else {
+                if cfg!(feature = "updating_cache") && after_delivered > self.cache_limit {
+                    // Sender needs to leave the cache
+                    Some(self.cache_remove(Sender::name(), time))
+                } else {
+                    None
+                }
+            };
+
+            if before != after {
+                match self.is_cached[Receiver::name()] {
+                    UNCACHED => {
+                        if after < self.cache_limit {
+                            match empty_slot {
+                                Some(slot) => {
+                                    // We can take sender's position in the cache
+                                    self.cache_replace(slot, Receiver::name());
+                                }
+                                None => {
+                                    self.cache_insert(Receiver::name());
+                                }
+                            }
+                        } else {
+                            // Put receiver back into the queue
+                            self.queue_add(Receiver::name(), after);
+                        }
+                    }
+                    _ => { } // Receiver is already in the cache
+                }
             }
         }
-        else if cfg!(feature = "linked_list") && before != after {
-            if sender_id != Receiver::name() && before != Time::MAX {
-                // Receiver already had a message queued
+        else if cfg!(feature = "linked_list") {
+            if before != after && before != Time::MAX {
+                // Receiver already had a message queued, but it's replacing it
                 self.queue_remove(Receiver::name());
             }
-            if after != Time::MAX {
+            if after_delivered != Time::MAX {
+                self.queue_add(Sender::name(), after_delivered);
+            }
+            if before != after && after != Time::MAX {
                 // Receiver has a message queued
-                self.queue_add(Receiver::name());
-
-                if after < self.cache_limit {
-                    // invalidate the cache
-                    self.cache_valid = false;
-                }
+                self.queue_add(Receiver::name(), after);
             }
         }
 
         result
     }
 
-    fn message_delivered<Sender>(&mut self, time: Time, _limit: Time)
-    where
-        Sender: Actor<ActorNames>,
-    {
-        let actor = self.actors.get::<Sender>();
-
-        // PERF: When Sender != Receiver, before will always be Time::MAX.
-        //       We should make sure the compiler optimizes this case
-        let before = actor.outbox.time();
-        actor.obj.message_delivered(&mut actor.outbox, time);
-        let after = actor.outbox.time();
-
-        if cfg!(feature = "branchless") && after < self.cache_limit && after != Time::MAX {
-            // Actor can stay in the cache
-        } else if cfg!(feature = "linked_list") {
-            // The Sender send another message, add the Sender back to the queue
-            if cfg!(feature = "branchless") {
-                // Actor needs to leave the cache
-                let cache_slot = self.is_cached[Sender::name()];
-                debug_assert!(cache_slot != UNCACHED);
-                self.cached[cache_slot as usize] = None;
-                self.is_cached[Sender::name()] = UNCACHED;
-            }
-            if before != after && after != Time::MAX {
-                self.queue_add(Sender::name());
-                if after > self.cache_limit {
-                    // invalidate the cache
-                    self.cache_valid = false;
-                }
-            }
-        }
-    }
-
-    fn self_call<Receiver, Message>(&mut self, msg: Message, time: Time, limit: Time) -> SchedulerResult
+    fn execute_message_self<Receiver, Message>(&mut self, msg: Message, time: Time, limit: Time) -> SchedulerResult
     where
         Receiver: Actor<ActorNames> + Handler<ActorNames, Message>,
     {
@@ -465,27 +567,16 @@ impl<ActorNames> Scheduler<ActorNames> where
         actor.obj.message_delivered(&mut actor.outbox, time);
         let after = actor.outbox.time();
 
-        if cfg!(feature = "branchless") && self.is_cached[Receiver::name()] != UNCACHED {
-            if after >= self.cache_limit {
-                // remove from cache
-                let cache_slot = self.is_cached[Receiver::name()] as usize;
-                self.cached[cache_slot] = None;
-                self.is_cached[Receiver::name()] = UNCACHED;
-                if after != Time::MAX {
-                    self.queue_add(Receiver::name());
-                }
+        if cfg!(feature = "cached") {
+            debug_assert!(self.is_cached[Receiver::name()] != UNCACHED);
+            if cfg!(feature = "updating_cache") && after != Time::MAX && after >= self.cache_limit {
+                 // remove from cache
+                 self.cache_remove(Receiver::name(), after);
             }
         }
         else if cfg!(feature = "linked_list") && Time::MAX != after {
-            if after != Time::MAX {
-                // Receiver has a message queued
-                self.queue_add(Receiver::name());
-
-                if after < self.cache_limit {
-                    // invalidate the cache
-                    self.cache_valid = false;
-                }
-            }
+            // The main scheduler loop already popped us from the queue
+            self.queue_add(Receiver::name(), after);
         }
 
         result
@@ -518,12 +609,9 @@ where
     //println!("{:?} -> {:?} @ ({})", Sender::name(), Receiver::name(), time);
 
     if Receiver::name() == Sender::name() {
-        return scheduler.self_call::<Receiver, Message>(message, time, limit);
+        scheduler.execute_message_self::<Receiver, Message>(message, time, limit)
     } else {
-        let result = scheduler.call_receiver::<Receiver, _>(Sender::name(), message, time, limit);
-        scheduler.message_delivered::<Sender>(time, limit);
-
-        return result;
+        scheduler.execute_message::<Sender, Receiver, _>(message, time, limit)
     }
 }
 
@@ -548,7 +636,7 @@ where
     let endpoint_fn = unsafe { endpoint_fn.assume_init() };
 
     let result = (endpoint_fn)(packet_view, limit);
-    scheduler.message_delivered::<Sender>(time, limit);
+    todo!();
 
     result
 }
