@@ -1,0 +1,9 @@
+[package]
+name = "vr4300"
+version.workspace = true
+edition = "2021"
+
+[lib]
+
+[dependencies]
+modular-bitfield = "0.11.2"

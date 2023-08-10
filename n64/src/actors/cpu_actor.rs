@@ -5,7 +5,9 @@
 use actor_framework::{Actor, Time, Handler,  OutboxSend, SchedulerResult, ActorCreate};
 use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor, pi_actor::{PiActor, self}, vi_actor::ViActor, ai_actor::AiActor, rdp_actor::RdpActor};
 
-use crate::{vr4300::{self}, actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::{RspActor, self}}};
+use vr4300;
+
+use crate::actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::{RspActor, self}};
 
 pub struct CpuActor {
     committed_time: Time,

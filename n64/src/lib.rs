@@ -1,6 +1,5 @@
 
 pub mod actors;
-pub mod vr4300;
 
 pub mod cic;
 pub mod pif;
