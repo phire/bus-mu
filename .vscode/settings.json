@@ -10,5 +10,7 @@
     ],
     "rust-analyzer.linkedProjects": [
         "./actor_framework/Cargo.toml",
+        "./actor_framework/Cargo.toml",
+        "./actor_framework/Cargo.toml"
     ]
 }

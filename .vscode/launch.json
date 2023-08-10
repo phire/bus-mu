@@ -11,7 +11,6 @@
             "program": "${workspaceFolder}/target/debug/bus-mu",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "sourceFileMap": {},
         }
     ]
 }
