@@ -30,6 +30,7 @@ impl<E> ObjectStore<E> where
     }
 
     #[inline(always)]
+    #[allow(dead_code)]
     pub fn get_view<'a, 'b, U>(&'a mut self) -> ObjectStoreView<'b, E, ActorBox<E, U>>
     where
         U: Named<E> + Sized + Actor<E> + 'b,
@@ -58,6 +59,7 @@ pub struct ObjectStoreView<'a, E, U>
     storage: * mut ObjectStore<E>,
 }
 
+#[allow(dead_code)]
 impl<'a, E, U> ObjectStoreView<'a, E, U>
     where
         E: MakeNamed,

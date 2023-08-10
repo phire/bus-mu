@@ -344,10 +344,6 @@ impl<ActorNames> Scheduler<ActorNames> where
         return (Some(sender_id), self.get_time(sender_id), limit);
     }
 
-    fn queue_peek(&self) -> Option<ActorNames> {
-        self.queue_head
-    }
-
     #[inline(never)]
     fn queue_add(&mut self, id: ActorNames, time: Time) {
         debug_assert!(time == self.get_time(id), "Time mismatch");
@@ -423,6 +419,7 @@ impl<ActorNames> Scheduler<ActorNames> where
         }
     }
 
+    #[allow(dead_code)]
     fn queue_print(&mut self) {
         let mut next = self.queue_head;
         println!("Queue: (Head = {:?})", next);
@@ -435,6 +432,7 @@ impl<ActorNames> Scheduler<ActorNames> where
         }
     }
 
+    #[allow(dead_code)]
     fn queue_validate(&mut self) {
         for id in ActorNames::iter() {
             let time = self.get_time(id).lower_bound();
@@ -487,6 +485,7 @@ impl<ActorNames> Scheduler<ActorNames> where
         let after = receiver.outbox.time();
 
         let sender = self.actors.get::<Sender>();
+        let before_delivered = sender.outbox.time();
         sender.obj.message_delivered(&mut sender.outbox, time);
         let after_delivered = sender.outbox.time();
 
@@ -507,7 +506,7 @@ impl<ActorNames> Scheduler<ActorNames> where
                 }
             }
 
-            let empty_slot = if after_delivered == Time::MAX {
+            let empty_slot = if before_delivered != after_delivered {
                 Some(self.is_cached[Sender::name()] as usize)
             } else {
                 if cfg!(feature = "updating_cache") && after_delivered > self.cache_limit {
@@ -545,7 +544,11 @@ impl<ActorNames> Scheduler<ActorNames> where
                 // Receiver already had a message queued, but it's replacing it
                 self.queue_remove(Receiver::name());
             }
-            if after_delivered != Time::MAX {
+            // PERF: before_delivered will always be Time::MAX (because of take_message) so we could
+            //       use `after_delivered != Time::MAX`, but llvm doesn't seem to detect that as dead
+            //       code, so this generally produces better code
+            if before_delivered != after_delivered {
+                debug_assert!(after_delivered != Time::MAX);
                 self.queue_add(Sender::name(), after_delivered);
             }
             if before != after && after != Time::MAX {
@@ -563,18 +566,20 @@ impl<ActorNames> Scheduler<ActorNames> where
     {
         let actor = self.actors.get::<Receiver>();
 
+        let before = actor.outbox.time();
+
         let result = actor.obj.recv(&mut actor.outbox, msg, time, limit);
         actor.obj.message_delivered(&mut actor.outbox, time);
         let after = actor.outbox.time();
 
         if cfg!(feature = "cached") {
             debug_assert!(self.is_cached[Receiver::name()] != UNCACHED);
-            if cfg!(feature = "updating_cache") && after != Time::MAX && after >= self.cache_limit {
+            if cfg!(feature = "updating_cache") && before != after && after >= self.cache_limit {
                  // remove from cache
                  self.cache_remove(Receiver::name(), after);
             }
         }
-        else if cfg!(feature = "linked_list") && Time::MAX != after {
+        else if cfg!(feature = "linked_list") && before != after {
             // The main scheduler loop already popped us from the queue
             self.queue_add(Receiver::name(), after);
         }
@@ -615,30 +620,31 @@ where
     }
 }
 
-pub(super) fn endpoint_execute<'a, ActorNames, Sender, Message>(_: ActorNames, scheduler: &'a mut Scheduler<ActorNames>, limit: Time) -> SchedulerResult
+pub(super) fn endpoint_execute<'a, ActorNames, Sender, Message>(_: ActorNames, _scheduler: &'a mut Scheduler<ActorNames>, _limit: Time) -> SchedulerResult
 where
     ActorNames: MakeNamed,
     Message: 'static,
     Sender: Actor<ActorNames>,
     <Sender as Actor<ActorNames>>::OutboxType: OutboxSend<ActorNames, Message>,
 {
-    let mut packet_view = scheduler.actors.get_view::<Sender>().map(
-        |actor_box| {
-            let packet = actor_box.outbox.as_packet();
-            // Safety: Type checked in MessagePacket::from_endpoint
-            unsafe { packet.unwrap_unchecked() }
-        }
-    );
-    let (endpoint_fn, time) =
-        packet_view.run(|p| (p.endpoint_fn.clone(), p.time.clone()));
-
-    // Safety: Type checked in MessagePacket::from_endpoint
-    let endpoint_fn = unsafe { endpoint_fn.assume_init() };
-
-    let result = (endpoint_fn)(packet_view, limit);
     todo!();
+    // let mut packet_view = scheduler.actors.get_view::<Sender>().map(
+    //     |actor_box| {
+    //         let packet = actor_box.outbox.as_packet();
+    //         // Safety: Type checked in MessagePacket::from_endpoint
+    //         unsafe { packet.unwrap_unchecked() }
+    //     }
+    // );
+    // let (endpoint_fn, time) =
+    //     packet_view.run(|p| (p.endpoint_fn.clone(), p.time.clone()));
 
-    result
+    // // Safety: Type checked in MessagePacket::from_endpoint
+    // let endpoint_fn = unsafe { endpoint_fn.assume_init() };
+
+    // let result = (endpoint_fn)(packet_view, limit);
+
+
+    // result
 }
 
 pub(super) fn null_execute<ActorNames>(_: ActorNames, _: &mut Scheduler<ActorNames>, _: Time) -> SchedulerResult
