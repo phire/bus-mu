@@ -1,27 +1,24 @@
 
-use std::time::Instant;
+fn no_ui_run(cores: Vec<Box<dyn common::Core>>) -> Result<(), anyhow::Error> {
+    let com = cores.iter().next().unwrap().create()?;
+    com.control.send(common::ControlMessage::MoveTo(common::State::Run))?;
+
+    loop {
+        match com.update.recv() {
+            Err(_) => { return com.join.join().unwrap(); }
+            _ => {}
+        }
+    }
+}
 
 fn main() {
-    // use multiple runs for stable benchmarks
-    let loops = 10;
-    for _ in 0..loops {
-        let start = Instant::now();
+    let cores : Vec<Box<dyn common::Core>> = vec!(
+        n64::new(),
+    );
 
-        let result = std::panic::catch_unwind(|| {
-            let mut scheduler = n64::new();
-
-            scheduler.run();
-        });
-
-        match result {
-            Ok(_) => {},
-            Err(_) => {
-                eprintln!("Scheduler panicked");
-            }
-        }
-
-        let duration = start.elapsed();
-        eprintln!("Execution time {:?}", duration);
+    if cfg!(feature = "ui") {
+        ui::run(cores);
+    } else {
+        no_ui_run(cores).err().map(|e| eprintln!("{:?}", e));
     }
-
 }

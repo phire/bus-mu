@@ -1,5 +1,7 @@
 
-use std::usize;
+use std::{usize, sync::mpsc::{self, TryRecvError}};
+
+use common::{ControlMessage, UpdateMessage};
 
 use crate::{object_map::{ObjectStore, ObjectStoreView}, Time, MakeNamed, Actor, MessagePacket, OutboxSend, Handler, Outbox, EnumMap};
 
@@ -249,8 +251,24 @@ impl<ActorNames> Scheduler<ActorNames> where
     }
 
     #[inline(never)]
-    pub fn run(&mut self) -> Box<dyn std::error::Error> {
+    pub fn run(
+        &mut self,
+        control_rx: &mpsc::Receiver<ControlMessage>,
+        updates_tx: &mpsc::SyncSender<UpdateMessage>,
+    ) -> Result<bool, anyhow::Error> {
         loop {
+            use common::State::*;
+            match control_rx.try_recv() {
+                Err(TryRecvError::Empty) => {},
+                Ok(ControlMessage::Exit) => { return Ok(true); },
+                Ok(ControlMessage::MoveTo(Pause)) => { return Ok(false); },
+                Ok(ControlMessage::MoveTo(Run)) => { unreachable!(); }
+                #[cfg(feature = "ui")]
+                Ok(ControlMessage::DoUi(_ctx)) => {
+                    todo!();
+                },
+                Err(err) => { return Err(err.into()); },
+            }
             let (sender_id, time, limit) = self.take_next();
             //println!("Running actor {:?}. Next @ {}", sender_id, limit);
 
@@ -264,22 +282,20 @@ impl<ActorNames> Scheduler<ActorNames> where
                     // And one of the receivers couldn't deal with the zero limit message, so we switch
                     // to a more complex scheduler until the current cycle finishes.
                     self.zero_limit_count += 1;
-                    if let Some(exit_reason) = self.run_zero_limit(time, limit) {
-                        return exit_reason;
-                    }
+                    self.run_zero_limit(time, limit)?;
                 },
                 SchedulerResult::ZeroLimit => {
                     self.zero_limit_count += 1;
                 },
-                SchedulerResult::Exit(reason) => {
-                    return reason;
+                SchedulerResult::Err(reason) => {
+                    return Err(reason);
                 }
             }
         }
     }
 
     #[inline(never)]
-    pub fn run_zero_limit(&mut self, time: Time, limit: Time) -> Option<Box<dyn std::error::Error>> {
+    pub fn run_zero_limit(&mut self, time: Time, limit: Time) -> Result<(), anyhow::Error> {
         assert!(time == limit, "Actor incorrectly reported a zero limit");
 
         // We might need to go though multiple iterations before this settles
@@ -291,8 +307,8 @@ impl<ActorNames> Scheduler<ActorNames> where
                     let result = self.run_inner(actor, time);
                     match result {
                         SchedulerResult::Ok | SchedulerResult::ZeroLimit => {},
-                        SchedulerResult::Exit(reason) => {
-                            return Some(reason);
+                        SchedulerResult::Err(reason) => {
+                            return Err(reason);
                         }
                     }
                 }
@@ -300,7 +316,7 @@ impl<ActorNames> Scheduler<ActorNames> where
 
             let (_, time, limit) = self.take_next();
             if time != limit {
-                return None;
+                return Ok(());
             }
         }
         panic!("Zero limit cycle detected");
@@ -671,7 +687,7 @@ pub enum SchedulerResult
 {
     Ok,
     ZeroLimit,
-    Exit(Box<dyn std::error::Error>)
+    Err(anyhow::Error)
 }
 
 pub(super) type ExecuteFn<ActorNames> = for<'a> fn(sender_id: ActorNames, scheduler: &'a mut Scheduler<ActorNames>, limit: Time) -> SchedulerResult;

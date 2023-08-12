@@ -1,4 +1,11 @@
 [workspace]
+members = [
+    "actor_framework",
+    "common",
+    "n64",
+    "n64/vr4300",
+    "ui/",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,6 +16,21 @@ name = "bus-mu"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["ui"]
+ui = [
+    "common/ui",
+    "n64/ui",
+]
+
 [dependencies]
-actor_framework = { path = "actor_framework" }
+common = { path = "common" }
 n64 = { path = "n64" }
+ui = { path = "ui" }
+anyhow = { workspace = true }
+
+[workspace.dependencies]
+modular-bitfield = "0.11.2"
+eframe = "0.22.0"
+egui = "0.22.0"
+anyhow = "1.0"

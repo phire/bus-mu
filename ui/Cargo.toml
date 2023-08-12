@@ -1,0 +1,10 @@
+[package]
+name = "ui"
+version.workspace = true
+edition = "2021"
+
+[lib]
+
+[dependencies]
+eframe = { workspace = true }
+common = { path = "../common" }

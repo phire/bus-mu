@@ -1,0 +1,13 @@
+[package]
+name = "common"
+version.workspace = true
+edition = "2021"
+
+[lib]
+
+[features]
+ui = ["egui"]
+
+[dependencies]
+anyhow = { workspace = true }
+egui = { workspace = true, optional = true }

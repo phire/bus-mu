@@ -6,6 +6,11 @@ pub mod pif;
 
 pub use actors::N64Actors;
 
-pub fn new() -> actor_framework::Scheduler<N64Actors> {
-    actor_framework::Scheduler::new()
+pub type CoreN64 = actor_framework::ActorFrameworkCore<N64Actors>;
+
+pub fn new() -> Box<CoreN64> {
+    let mut core = CoreN64::new();
+    core.set_name("Nintendo 64");
+
+    Box::new(core)
 }

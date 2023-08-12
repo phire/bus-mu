@@ -5,7 +5,10 @@ edition = "2021"
 
 [lib]
 
+[features]
+ui = ["common/ui", "actor_framework/ui"]
+
 [dependencies]
-modular-bitfield = "0.11.2"
 actor_framework = { path = "../actor_framework" }
 vr4300 = { path = "vr4300" }
+common = { path = "../common" }

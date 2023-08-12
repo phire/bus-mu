@@ -6,11 +6,14 @@ edition = "2021"
 [lib]
 
 [features]
-default = ["linked_list"] # Currently fastest
+default = ["linked_list"]
 branchless = []
-linked_list = []
+linked_list = []  # Currently fastest
 cached = ["linked_list"]
 updating_cache = ["cached"]
+ui = []
 
 [dependencies]
 named-derive = { version = "0.1.0", path = "named-derive" }
+anyhow = { workspace = true }
+common = { path = "../common" }
