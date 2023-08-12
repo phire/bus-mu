@@ -57,7 +57,7 @@ pub struct Scheduler<ActorNames> where
 impl<ActorNames> Drop for Scheduler<ActorNames>
 where
     ActorNames: MakeNamed,
-    <ActorNames as MakeNamed>::StorageType: Default,
+    <ActorNames as MakeNamed>::ArrayType<QueueEntry<ActorNames>>: Send,
 {
     fn drop(&mut self) {
         eprintln!("Scheduler ran {} times", self.count);
@@ -254,18 +254,14 @@ impl<ActorNames> Scheduler<ActorNames> where
     pub fn run(
         &mut self,
         control_rx: &mpsc::Receiver<ControlMessage>,
-        updates_tx: &mpsc::SyncSender<UpdateMessage>,
-    ) -> Result<bool, anyhow::Error> {
+        updates_tx: mpsc::SyncSender<UpdateMessage>,
+    ) -> Result<(), anyhow::Error> {
         loop {
-            use common::State::*;
             match control_rx.try_recv() {
                 Err(TryRecvError::Empty) => {},
-                Ok(ControlMessage::Exit) => { return Ok(true); },
-                Ok(ControlMessage::MoveTo(Pause)) => { return Ok(false); },
-                Ok(ControlMessage::MoveTo(Run)) => { unreachable!(); }
-                #[cfg(feature = "ui")]
-                Ok(ControlMessage::DoUi(_ctx)) => {
-                    todo!();
+                Ok(ControlMessage::Pause) => { return Ok(()); },
+                Ok(ControlMessage::UiSync) => {
+                    updates_tx.send(UpdateMessage::UiSynced)?;
                 },
                 Err(err) => { return Err(err.into()); },
             }
@@ -690,7 +686,8 @@ pub enum SchedulerResult
     Err(anyhow::Error)
 }
 
-pub(super) type ExecuteFn<ActorNames> = for<'a> fn(sender_id: ActorNames, scheduler: &'a mut Scheduler<ActorNames>, limit: Time) -> SchedulerResult;
+pub(super) type ExecuteFn<ActorNames> where
+ = for<'a> fn(sender_id: ActorNames, scheduler: &'a mut Scheduler<ActorNames>, limit: Time) -> SchedulerResult;
 
 pub(super) fn direct_execute<'a, ActorNames, Sender, Receiver, Message>(_: ActorNames, scheduler: &'a mut Scheduler<ActorNames>, limit: Time) -> SchedulerResult
 where

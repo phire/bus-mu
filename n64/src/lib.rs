@@ -6,11 +6,14 @@ pub mod pif;
 
 pub use actors::N64Actors;
 
-pub type CoreN64 = actor_framework::ActorFrameworkCore<N64Actors>;
+pub struct CoreN64 { }
 
-pub fn new() -> Box<CoreN64> {
-    let mut core = CoreN64::new();
-    core.set_name("Nintendo 64");
+impl common::EmulationCore for CoreN64 {
+    fn name(&self) -> &'static str { "Nintendo 64" }
 
-    Box::new(core)
+    fn new_send(&self) -> Result<Box<dyn common::Instance + Send>, anyhow::Error> {
+        Ok(Box::new(actor_framework::Instance::<N64Actors>::new()))
+    }
 }
+
+pub static CORE_N64 : CoreN64 = CoreN64 { };

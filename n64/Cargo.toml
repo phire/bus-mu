@@ -12,3 +12,4 @@ ui = ["common/ui", "actor_framework/ui"]
 actor_framework = { path = "../actor_framework" }
 vr4300 = { path = "vr4300" }
 common = { path = "../common" }
+anyhow = { workspace = true }

@@ -143,7 +143,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
             type Base<A> = #base<#ident, A> where A: actor_framework::Actor<#ident>;
             type ExitReason = Box<dyn #exit_reason>;
             type StorageType = #storage_type;
-            type ArrayType<T> = [T; #count];
+            type ArrayType<T> = [T; #count] where T: Send;
 
             fn size_of(id: Self) -> usize {
                 match id {
@@ -151,13 +151,19 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
                 }
             }
 
-            fn index_array<T>(array: &Self::ArrayType<T>, id: Self) -> &T {
+            fn index_array<T>(array: &Self::ArrayType<T>, id: Self) -> &T
+            where T: Send
+            {
                 &array[usize::from(id)]
             }
-            fn index_array_mut<T>(array: &mut Self::ArrayType<T>, id: Self) -> &mut T {
+            fn index_array_mut<T>(array: &mut Self::ArrayType<T>, id: Self) -> &mut T
+            where T: Send
+            {
                 &mut array[usize::from(id)]
             }
-            fn array_from_fn<T>(mut f: impl FnMut(Self) -> T) -> Self::ArrayType<T> {
+            fn array_from_fn<T>(mut f: impl FnMut(Self) -> T) -> Self::ArrayType<T>
+            where T: Send
+            {
                 std::array::from_fn(|id| f(id.into()))
             }
         }
@@ -180,7 +186,8 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
 
         pub struct #storage_type {
             inner: Box<#storage_type_inner>,
-            base_ptrs: [*mut actor_framework::ActorBoxBase<#ident>; #count]
+            //base_ptrs: [*mut actor_framework::ActorBoxBase<#ident>; #count]
+            base_ptrs: [usize; #count]
         }
 
         impl actor_framework::AsBase<#ident> for #storage_type {
@@ -194,6 +201,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
                 let ptr = self.base_ptrs[i];
 
                 unsafe {
+                    let ptr: *mut actor_framework::ActorBoxBase<#ident> = std::mem::transmute(ptr);
                     ptr.as_ref().unwrap_unchecked()
                 }
             }
@@ -206,7 +214,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
                 });
                 let base_ptrs = core::array::from_fn(|i| {
                     let id: #ident = i.into();
-                    inner.base_ptr(id)
+                    inner.base_ptr(id) as usize
                 });
 
                 Self {

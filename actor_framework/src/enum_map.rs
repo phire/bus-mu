@@ -4,12 +4,15 @@ use std::ops::{IndexMut, Index};
 pub struct EnumMap<T, E>
     where
         E: MakeNamed,
+        T: Send,
 {
     contents: E::ArrayType<T>,
 }
 
 impl<T, E> EnumMap<T, E>
-    where E: MakeNamed,
+    where
+        E: MakeNamed,
+        T: Send,
 {
     pub fn new() -> EnumMap<T, E>
     where
@@ -41,13 +44,16 @@ impl<T, E> EnumMap<T, E>
 pub struct EnumMapIterator<'a, T, E>
     where
         E: MakeNamed,
+        T: Send,
 {
     pos: usize,
     map: &'a EnumMap<T, E>,
 }
 
 impl<'a, T, E> Iterator for EnumMapIterator<'a, T, E>
-    where E: MakeNamed,
+    where
+        E: MakeNamed,
+        T: Send,
 {
     type Item = (E, &'a T);
 
@@ -64,7 +70,9 @@ impl<'a, T, E> Iterator for EnumMapIterator<'a, T, E>
 }
 
 impl<T, E> Index<E> for EnumMap<T, E>
-    where E: MakeNamed,
+    where
+        E: MakeNamed,
+        T: Send,
 {
     type Output = T;
     fn index(&self, id: E) -> &T {
@@ -73,7 +81,9 @@ impl<T, E> Index<E> for EnumMap<T, E>
 }
 
 impl<T, E> IndexMut<E> for EnumMap<T, E>
-    where E: MakeNamed,
+    where
+        E: MakeNamed,
+        T: Send
 {
     fn index_mut(&mut self, id: E) -> &mut T {
         E::index_array_mut(&mut self.contents, id)

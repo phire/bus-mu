@@ -1,25 +1,23 @@
-use common::{State, Core, ControlMessage};
+use common::{EmulationCore, Status};
 use eframe::egui;
 
 
 struct BusMuApp {
-    active_core: Option<Box<dyn common::Core>>,
-    core_instance: common::CoreCommunication,
-    core_state: common::State,
+    active_core: Option<&'static dyn common::EmulationCore>,
+    instance: Option<Box<dyn common::ThreaddedInstance>>,
 }
 
 impl BusMuApp {
-    fn new(_cc: &eframe::CreationContext<'_>, core: Box<dyn Core>) -> Self {
+    fn new(_cc: &eframe::CreationContext<'_>, core: &'static dyn EmulationCore) -> Result<Self, anyhow::Error> {
         // Customize egui here with cc.egui_ctx.set_fonts and cc.egui_ctx.set_visuals.
         // Restore app state using cc.storage (requires the "persistence" feature).
         // Use the cc.gl (a glow::Context) to create graphics shaders and buffers that you can use
         // for e.g. egui::PaintCallback.
-        let core_instance = core.create().unwrap();
-        Self {
+        let instance = core.new_threadded()?;
+        Ok(Self {
             active_core: Some(core),
-            core_instance,
-            core_state: common::State::Pause,
-        }
+            instance: Some(instance),
+        })
     }
 }
 
@@ -27,21 +25,35 @@ impl eframe::App for BusMuApp {
    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
        egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(core) = &self.active_core {
-                    let (current, change) = match self.core_state {
-                        State::Run => ("Running", State::Pause),
-                        State::Pause => ("Paused", State::Run),
-                    };
-
-                ui.heading(format!("{} is {}", core.name(), current));
-                if ui.button(format!("{:?}", change)).clicked() {
-                    self.core_instance.control.send(ControlMessage::MoveTo(change)).unwrap();
+                match &mut self.instance {
+                    Some(instance) => {
+                        ui.heading(format!("{} is {:?}", core.name(), instance.status()));
+                        match instance.status() {
+                            Status::Paused => {
+                                if ui.button("Resume").clicked() {
+                                    instance.start().unwrap();
+                                }
+                            }
+                            Status::Running => {
+                                if ui.button("Pause").clicked() {
+                                    instance.pause().unwrap();
+                                }
+                            }
+                            Status::Error => {
+                                ui.heading("Instance paniced");
+                            }
+                        }
+                    }
+                    None => {
+                        ui.heading(format!("{} is stopped", core.name()));
+                    }
                 }
             }
        });
    }
 }
 
-pub fn run(cores: Vec<Box<dyn common::Core>>) {
+pub fn run(cores: Vec<&'static dyn common::EmulationCore>)  {
     // TODO: support dynamically selecting between cores
     let core = cores.into_iter().next().unwrap();
 
@@ -49,7 +61,7 @@ pub fn run(cores: Vec<Box<dyn common::Core>>) {
     let result = eframe::run_native(
         "Bus-mu",
         native_options,
-        Box::new(|cc| Box::new(BusMuApp::new(cc, core)))
+        Box::new(|cc| Box::new(BusMuApp::new(cc, core).unwrap()))
     );
     result.unwrap();
 }

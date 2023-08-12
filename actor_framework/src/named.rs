@@ -14,16 +14,15 @@ pub trait Named<E> {
         Self: Actor<E> + Sized;
 }
 
-pub trait MakeNamed : From<usize> + Into<usize> + PartialEq + Copy + 'static + std::fmt::Debug
-where
-    Self::StorageType: Default + AsBase<Self>,
+pub trait MakeNamed : From<usize> + Into<usize> + PartialEq + Copy + 'static + std::fmt::Debug + Send
+
 {
     const COUNT: usize;
     const TERMINAL: Self; // Scheduler uses this as an actor that never get scheduled
     type Base<A> where A: Actor<Self>, Self: Sized;
     type ExitReason = Box<dyn std::error::Error>;
-    type StorageType;
-    type ArrayType<T>;
+    type StorageType: Default + AsBase<Self> + Send;
+    type ArrayType<T> : Send where T: Send;
 
     fn iter() -> NamedIterator<Self> where Self: Sized, Self: From<usize> {
         NamedIterator {
@@ -32,9 +31,9 @@ where
         }
     }
 
-    fn index_array<T>(array: &Self::ArrayType<T>, id: Self) -> &T;
-    fn index_array_mut<T>(array: &mut Self::ArrayType<T>, id: Self) -> &mut T;
-    fn array_from_fn<T>(f: impl FnMut(Self) -> T) -> Self::ArrayType<T>;
+    fn index_array<T>(array: &Self::ArrayType<T>, id: Self) -> &T where T: Send;
+    fn index_array_mut<T>(array: &mut Self::ArrayType<T>, id: Self) -> &mut T where T: Send;
+    fn array_from_fn<T>(f: impl FnMut(Self) -> T) -> Self::ArrayType<T> where T: Send;
 
     fn size_of(id: Self) -> usize;
 }

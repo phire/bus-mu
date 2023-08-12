@@ -1,19 +1,17 @@
+use std::sync::mpsc;
 
-fn no_ui_run(cores: Vec<Box<dyn common::Core>>) -> Result<(), anyhow::Error> {
-    let com = cores.iter().next().unwrap().create()?;
-    com.control.send(common::ControlMessage::MoveTo(common::State::Run))?;
 
-    loop {
-        match com.update.recv() {
-            Err(_) => { return com.join.join().unwrap(); }
-            _ => {}
-        }
-    }
+fn no_ui_run(cores: Vec<&dyn common::EmulationCore>) -> Result<(), anyhow::Error> {
+    let mut instance = cores.iter().next().unwrap().new()?;
+    let (_tx_control, rx_control) = mpsc::channel::<common::ControlMessage>();
+    let (tx_update, _rx_update) = mpsc::sync_channel::<common::UpdateMessage>(1);
+
+    instance.run(&rx_control, tx_update)
 }
 
 fn main() {
-    let cores : Vec<Box<dyn common::Core>> = vec!(
-        n64::new(),
+    let cores : Vec<&dyn common::EmulationCore> = vec!(
+        &n64::CORE_N64,
     );
 
     if cfg!(feature = "ui") {

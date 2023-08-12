@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 eframe = { workspace = true }
 common = { path = "../common" }
+anyhow = { workspace = true }

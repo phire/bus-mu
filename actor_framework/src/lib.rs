@@ -13,12 +13,12 @@ mod object_map;
 mod named;
 mod outbox;
 
-use std::{sync::mpsc, marker::PhantomData};
+use std::sync::mpsc;
 
 pub use actor_box::{ActorBox, ActorBoxBase, AsBase};
 pub use addr::Addr;
 pub use channel::Channel;
-use common::{UpdateMessage, ControlMessage, State};
+use common::{UpdateMessage, ControlMessage};
 pub use endpoint::Endpoint;
 pub use named::{Named, MakeNamed};
 pub use named_derive::Named;
@@ -70,67 +70,33 @@ where
     ;
 }
 
-pub struct ActorFrameworkCore<ActorNames> where ActorNames: MakeNamed {
-    actor_names: PhantomData<ActorNames>,
-    name: &'static str,
+pub struct Instance<ActorNames> where ActorNames: MakeNamed {
+    scheduler: Scheduler<ActorNames>,
 }
 
-impl <ActorNames> ActorFrameworkCore<ActorNames> where ActorNames: MakeNamed {
-    pub fn new() -> ActorFrameworkCore<ActorNames> {
-        ActorFrameworkCore {
-            actor_names: PhantomData,
-            name: "Unnamed ActorFrameworkCore",
+impl<ActorNames> Instance<ActorNames> where ActorNames: MakeNamed {
+    pub fn new() -> Instance<ActorNames> {
+
+        Instance {
+            scheduler: Scheduler::<ActorNames>::new(),
         }
     }
-    pub fn set_name(&mut self, name: &'static str) {
-        self.name = name;
-    }
 }
 
-impl<ActorNames> common::Core for ActorFrameworkCore<ActorNames>
+impl<ActorNames> common::Instance for Instance<ActorNames>
 where
     ActorNames: MakeNamed,
 {
-    fn name(&self) -> &'static str {
-        self.name
+    fn run(&mut self,
+        control_rx: &mpsc::Receiver<ControlMessage>,
+        update: mpsc::SyncSender<UpdateMessage>
+    ) -> Result<(), anyhow::Error> {
+        self.scheduler.run(control_rx, update)
     }
 
-    fn create(&self) -> Result<common::CoreCommunication, anyhow::Error>
-    {
-        let (control_tx, control_rx) = mpsc::sync_channel::<ControlMessage>(1);
-        let (updates_tx, updates_rx) = mpsc::sync_channel::<UpdateMessage>(10);
-
-        let join =
-            std::thread::spawn(move || -> Result<(), anyhow::Error> {
-
-                let result =std::panic::catch_unwind(|| -> Result<(), anyhow::Error> {
-                    let mut scheduler = Scheduler::<ActorNames>::new();
-
-                    loop {
-                        match control_rx.recv()? {
-                            ControlMessage::MoveTo(State::Run) => {
-                                updates_tx.send(UpdateMessage::MovedTo(State::Run))?;
-                                if scheduler.run(&control_rx, &updates_tx)? {
-                                    return Ok(()); // Exit
-                                }
-                                updates_tx.send(UpdateMessage::MovedTo(State::Pause))?;
-                            }
-                            #[cfg(feature = "ui")]
-                            ControlMessage::DoUi(_ctx) => {
-                                todo!("Ui while paused")
-                            }
-                            _ => { unreachable!() }
-                        }
-                    }
-                });
-                result.map_err(|_| anyhow::anyhow!("core paniced"))?
-            });
-
-        Ok(common::CoreCommunication {
-            control: control_tx,
-            update: updates_rx,
-            join
-        })
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
+
 
