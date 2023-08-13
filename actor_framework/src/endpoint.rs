@@ -33,8 +33,6 @@ where
 
 impl<ActorNames, Message> Clone for Endpoint<ActorNames, Message>
     where ActorNames: MakeNamed,
-        //<ActorNames as MakeNamed>::Base: crate::Actor<ActorNames>,
-        //M: 'static,
 {
     fn clone(&self) -> Self {
         Endpoint {

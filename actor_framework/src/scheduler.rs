@@ -57,7 +57,6 @@ pub struct Scheduler<ActorNames> where
 impl<ActorNames> Drop for Scheduler<ActorNames>
 where
     ActorNames: MakeNamed,
-    <ActorNames as MakeNamed>::ArrayType<QueueEntry<ActorNames>>: Send,
 {
     fn drop(&mut self) {
         eprintln!("Scheduler ran {} times", self.count);

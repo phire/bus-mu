@@ -1,6 +1,4 @@
 
-#![feature(associated_type_defaults)]
-
 mod actor_box;
 mod addr;
 mod channel;
