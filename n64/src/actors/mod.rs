@@ -12,7 +12,7 @@ pub mod rdp_actor;
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 #[derive(Named)]
-#[named(base(actor_framework::ActorBox), exit_reason(std::error::Error))]
+#[named(base(actor_framework::ActorBox))]
 pub enum N64Actors {
     #[named(class(cpu_actor::CpuActor))]
     CpuActor,

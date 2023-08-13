@@ -20,7 +20,6 @@ pub trait MakeNamed : From<usize> + Into<usize> + PartialEq + Copy + 'static + s
     const COUNT: usize;
     const TERMINAL: Self; // Scheduler uses this as an actor that never get scheduled
     type Base<A> where A: Actor<Self>, Self: Sized;
-    type ExitReason = Box<dyn std::error::Error>;
     type StorageType: Default + AsBase<Self> + Send;
     type ArrayType<T> : Send where T: Send;
 

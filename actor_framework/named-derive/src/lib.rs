@@ -42,7 +42,6 @@ impl Variant {
 struct NamedEnum {
     data: Data<Variant, Ignored>,
     base: PathList,
-    exit_reason: PathList,
 }
 
 #[proc_macro_derive(Named, attributes(named, exit_reason))]
@@ -131,7 +130,6 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
     }
 
     let count = varients.len();
-    let exit_reason = &named_enum.exit_reason[0];
 
     let output = quote! {
 
@@ -141,7 +139,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
             const COUNT: usize = #count;
             const TERMINAL: Self = Self::#terminal;
             type Base<A> = #base<#ident, A> where A: actor_framework::Actor<#ident>;
-            type ExitReason = Box<dyn #exit_reason>;
+            //type ExitReason = Box<dyn #exit_reason>;
             type StorageType = #storage_type;
             type ArrayType<T> = [T; #count] where T: Send;
 
