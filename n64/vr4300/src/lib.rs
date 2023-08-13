@@ -18,6 +18,8 @@ pub mod cache;
 pub mod microtlb;
 pub mod joint_tlb;
 pub mod regfile;
+#[cfg(feature = "ui")]
+pub mod ui;
 
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

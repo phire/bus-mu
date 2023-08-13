@@ -6,6 +6,7 @@ members = [
     "n64/vr4300",
     "ui/",
 ]
+exclude = ["deps"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +20,7 @@ edition = "2021"
 [features]
 default = ["ui"]
 ui = [
+    "dep:ui",
     "common/ui",
     "n64/ui",
 ]
@@ -26,11 +28,14 @@ ui = [
 [dependencies]
 common = { path = "common" }
 n64 = { path = "n64" }
-ui = { path = "ui" }
+ui = { path = "ui", optional = true }
 anyhow = { workspace = true }
 
 [workspace.dependencies]
 modular-bitfield = "0.11.2"
-eframe = "0.22.0"
-egui = "0.22.0"
+eframe = "0.22"
+egui = "0.22"
 anyhow = "1.0"
+
+[profile.release]
+#lto = true

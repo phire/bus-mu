@@ -19,12 +19,19 @@ pub trait EmulationCore {
 
     /// Called while running to draw the core's UI
     #[cfg(feature = "ui")]
-    fn ui(&self, _ctx : egui::Context) { }
+    fn ui(&self, ui: &mut egui::Ui) {
+        // Default implementation: do nothing
+        let _ = ui;
+    }
 
     /// Called while paused to allow the core to draw it's UI
     /// The Paused version of the UI has full access to the instance's state
     #[cfg(feature = "ui")]
-    fn paused_ui(&self, _instance: &mut dyn Instance, _ctx : egui::Context) { }
+    fn paused_ui(&self, instance: &mut dyn Instance, ui: &mut egui::Ui) {
+        // Default implementation: fall back to the normal UI
+        let _ = instance;
+        self.ui(ui);
+    }
 }
 
 /// Messages sent from the core instance to the UI thread
@@ -74,9 +81,11 @@ pub trait ThreadedInstance {
     /// Pauses the core (blocks until paused)
     fn pause(&mut self) -> Result<(), anyhow::Error>;
     /// Draw the UI
-    fn ui(&self, core: &dyn EmulationCore, ctx : egui::Context);
+    #[cfg(feature = "ui")]
+    fn ui(&self, core: &dyn EmulationCore, ui: &mut egui::Ui);
     /// Draw the paused version of the UI
-    fn paused_ui(&mut self, core: &dyn EmulationCore, ctx : egui::Context);
+    #[cfg(feature = "ui")]
+    fn paused_ui(&mut self, core: &dyn EmulationCore, ui: &mut egui::Ui);
 
     /// Get the current status of the instance
     fn status(&self) -> Status;
@@ -169,15 +178,17 @@ impl ThreadedInstance for ThreadAdapter
             },
         }
     }
-    fn paused_ui(&mut self, core: &dyn EmulationCore, ctx : egui::Context)
+    #[cfg(feature = "ui")]
+    fn paused_ui(&mut self, core: &dyn EmulationCore, ui: &mut egui::Ui)
     {
         match self.instance {
-            Some(ref mut instance) => core.paused_ui(instance.as_mut(), ctx),
+            Some(ref mut instance) => core.paused_ui(instance.as_mut(), ui),
             None => panic!("Instance running or paniced")
         }
     }
 
-    fn ui(&self, core: &dyn EmulationCore, ctx : egui::Context)
+    #[cfg(feature = "ui")]
+    fn ui(&self, core: &dyn EmulationCore, ui: &mut egui::Ui)
     {
         assert!(self.instance.is_none());
         // Sync with instance thread
@@ -190,16 +201,14 @@ impl ThreadedInstance for ThreadAdapter
                 }
             }
         }
-        core.ui(ctx);
+        core.ui(ui);
     }
 
     fn status(&self) -> Status {
-        if self.instance.is_some() {
-            Status::Paused
-        } else if self.join.is_some() {
-            Status::Running
-        } else {
-            Status::Error
+        match (&self.instance, &self.join) {
+            (Some(_), _) => Status::Paused,
+            (None, Some(join)) if !join.is_finished() => Status::Running,
+            _ => Status::Error,
         }
     }
 }

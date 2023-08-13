@@ -1,7 +1,7 @@
 use super::instructions::MIPS_REG_NAMES;
 
 pub struct RegFile {
-    regs: [u64; 32],
+    pub(crate) regs: [u64; 32],
     bypass_reg: u8,
     bypass_val: Option<u64>,
     hazard: bool,

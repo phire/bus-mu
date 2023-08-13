@@ -58,7 +58,7 @@ pub struct Pipeline {
     ex: Execute,
     dc: DataCache,
     wb: WriteBack,
-    regs: RegFile,
+    pub(crate) regs: RegFile,
 }
 
 pub enum MemoryReq

@@ -118,6 +118,13 @@ impl<ActorNames> Scheduler<ActorNames> where
         scheduler
     }
 
+    pub fn get<ActorType>(&mut self) -> &mut ActorType
+    where
+        ActorType: Actor<ActorNames>,
+    {
+        &mut self.actors.get::<ActorType>().obj
+    }
+
     #[cfg(feature = "branchless")]
     fn take_next(&mut self) -> (ActorNames, Time, Time) {
         let mut min = Time::MAX;

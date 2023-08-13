@@ -12,7 +12,7 @@ use crate::actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::{RspActor, sel
 pub struct CpuActor {
     committed_time: Time,
     _cpu_overrun: u32,
-    cpu_core: vr4300::Core,
+    pub cpu_core: vr4300::Core,
     dmem_imem: Option<Box<[u32; 2048]>>, // 4K DMEM + 4K IMEM
     outstanding_mem_request: Option<vr4300::BusRequest>,
     bus_free: Time,
@@ -541,5 +541,11 @@ impl Handler<N64Actors, rsp_actor::ReqestMemOwnership> for CpuActor {
         outbox.send::<RspActor>(msg, time.add(4));
 
         SchedulerResult::Ok
+    }
+}
+
+impl CpuActor {
+    pub fn get_core(&mut self) -> &mut vr4300::Core {
+        &mut self.cpu_core
     }
 }

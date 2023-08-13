@@ -74,10 +74,15 @@ pub struct Instance<ActorNames> where ActorNames: MakeNamed {
 
 impl<ActorNames> Instance<ActorNames> where ActorNames: MakeNamed {
     pub fn new() -> Instance<ActorNames> {
-
         Instance {
             scheduler: Scheduler::<ActorNames>::new(),
         }
+    }
+
+    pub fn actor<ActorType>(&mut self) -> &mut ActorType
+    where ActorType: Actor<ActorNames>
+    {
+        self.scheduler.get::<ActorType>()
     }
 }
 

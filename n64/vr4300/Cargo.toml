@@ -5,5 +5,9 @@ edition = "2021"
 
 [lib]
 
+[features]
+ui = ["egui"]
+
 [dependencies]
 modular-bitfield = "0.11.2"
+egui = { workspace = true, optional = true }

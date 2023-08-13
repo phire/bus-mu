@@ -4,7 +4,7 @@ use eframe::egui;
 
 struct BusMuApp {
     active_core: Option<&'static dyn common::EmulationCore>,
-    instance: Option<Box<dyn common::ThreaddedInstance>>,
+    instance: Option<Box<dyn common::ThreadedInstance>>,
 }
 
 impl BusMuApp {
@@ -24,13 +24,17 @@ impl BusMuApp {
 impl eframe::App for BusMuApp {
    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
        egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(core) = &self.active_core {
+            if let Some(core) = self.active_core {
                 match &mut self.instance {
                     Some(instance) => {
                         ui.heading(format!("{} is {:?}", core.name(), instance.status()));
                         match instance.status() {
                             Status::Paused => {
-                                if ui.button("Resume").clicked() {
+                                let responce = ui.button("Resume");
+                                ui.separator();
+                                instance.paused_ui(core, ui);
+
+                                if responce.clicked() {
                                     instance.start().unwrap();
                                 }
                             }
@@ -53,7 +57,7 @@ impl eframe::App for BusMuApp {
    }
 }
 
-pub fn run(cores: Vec<&'static dyn common::EmulationCore>)  {
+pub fn run(cores: Vec<&'static dyn common::EmulationCore>) -> Result<(), anyhow::Error> {
     // TODO: support dynamically selecting between cores
     let core = cores.into_iter().next().unwrap();
 
@@ -63,5 +67,5 @@ pub fn run(cores: Vec<&'static dyn common::EmulationCore>)  {
         native_options,
         Box::new(|cc| Box::new(BusMuApp::new(cc, core).unwrap()))
     );
-    result.unwrap();
+    result.map_err(|e| anyhow::anyhow!("eframe error: {:?}", e))
 }
