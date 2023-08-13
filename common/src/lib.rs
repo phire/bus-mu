@@ -1,33 +1,53 @@
 use std::sync::mpsc::{self, SyncSender, Receiver};
 
 pub trait EmulationCore {
+    /// The name of the core
     fn name(&self) -> &'static str;
-    fn new_send(&self) -> Result<Box<dyn Instance + Send>, anyhow::Error>;
+    fn new(&self) -> Result<Box<dyn Instance + Send>, anyhow::Error>;
 
-    fn new(&self) -> Result<Box<dyn Instance>, anyhow::Error> {
-        Ok(self.new_send()?)
-    }
-    fn new_threadded(&self) -> Result<Box<dyn ThreaddedInstance>, anyhow::Error> {
-        Ok(Box::new(ThreadAdapter::new(self.new_send()?)?))
+    /// Create a single-threaded instance of the core.
+    /// Override the default implementation if your core doesn't implement Send
+    fn new_sync(&self) -> Result<Box<dyn Instance>, anyhow::Error> {
+        Ok(self.new()?)
     }
 
+    /// Create a multi-threaded instance of the core.
+    /// The default implementation calls `new()` and wraps it with `ThreadAdapter`
+    fn new_threadded(&self) -> Result<Box<dyn ThreadedInstance>, anyhow::Error> {
+        Ok(Box::new(ThreadAdapter::new(self.new()?)?))
+    }
+
+    /// Called while running to draw the core's UI
+    #[cfg(feature = "ui")]
+    fn ui(&self, _ctx : egui::Context) { }
+
+    /// Called while paused to allow the core to draw it's UI
+    /// The Paused version of the UI has full access to the instance's state
     #[cfg(feature = "ui")]
     fn paused_ui(&self, _instance: &mut dyn Instance, _ctx : egui::Context) { }
 }
 
+/// Messages sent from the core instance to the UI thread
 pub enum UpdateMessage {
+    /// Signals to the UI thread that the core has a new frame of video ready to be shown
     Vsync,
+    /// The instance has finished syncing with the UI thread
     UiSynced,
 }
 
+/// Messages sent from the UI thread when the core instance is running
 #[derive(Debug)]
 pub enum ControlMessage {
+    /// The core instance should pause and return from `Instance::run()`
     Pause,
+    /// Sent just before the UI is drawn.
+    /// The core instance should update any shared data structures needed to draw the UI and respond
+    /// with `UpdateMessage::UiSynced`
     UiSync,
 }
 
 /// Synchronous instance of an emulator core
-pub trait Instance : Send {
+pub trait Instance {
     fn run(&mut self,
         control_rx: &mpsc::Receiver<ControlMessage>,
         update: mpsc::SyncSender<UpdateMessage>
@@ -36,18 +56,29 @@ pub trait Instance : Send {
     fn as_any(&mut self) -> &mut dyn std::any::Any;
 }
 
+/// Status of a threaded instance
 #[derive(Debug)]
 pub enum Status {
+    /// The instance is running
     Running,
+    /// The instance is paused
     Paused,
+    /// The thread has panicked
     Error,
 }
 
 // Asynchronous instance of an emulator core
-pub trait ThreaddedInstance {
+pub trait ThreadedInstance {
+    /// Starts the core (non-blocking)
     fn start(&mut self) -> Result<(), anyhow::Error>;
+    /// Pauses the core (blocks until paused)
     fn pause(&mut self) -> Result<(), anyhow::Error>;
+    /// Draw the UI
+    fn ui(&self, core: &dyn EmulationCore, ctx : egui::Context);
+    /// Draw the paused version of the UI
     fn paused_ui(&mut self, core: &dyn EmulationCore, ctx : egui::Context);
+
+    /// Get the current status of the instance
     fn status(&self) -> Status;
 }
 
@@ -74,7 +105,7 @@ impl ThreadAdapter
         let (tx_instance, rx_instance) = mpsc::sync_channel::<Box<dyn Instance + Send>>(1);
         let (tx_instance_return, rx_instance_return) = mpsc::sync_channel::<Option<Box<dyn Instance + Send>>>(1);
 
-        // Span the thread
+        // Spawn the thread now.
         let join = std::thread::spawn(move || {
                 Self::thread_main(
                     rx_instance,
@@ -99,6 +130,8 @@ impl ThreadAdapter
         rx_control: Receiver<ControlMessage>,
         tx_update: SyncSender<UpdateMessage>
     ) -> Result<(), anyhow::Error> {
+        // We don't want to pay the overhead of starting a thread every time we unpause.
+        // Instead, we transfer the instance to and from the thread main loop as needed
         loop {
             let mut instance = rx_instance.recv()?;
             let result = instance.run(&rx_control, tx_update.clone());
@@ -116,7 +149,7 @@ impl ThreadAdapter
     }
 }
 
-impl ThreaddedInstance for ThreadAdapter
+impl ThreadedInstance for ThreadAdapter
 {
     fn start(&mut self) -> Result<(), anyhow::Error> {
         match self.instance.take() {
@@ -144,11 +177,27 @@ impl ThreaddedInstance for ThreadAdapter
         }
     }
 
+    fn ui(&self, core: &dyn EmulationCore, ctx : egui::Context)
+    {
+        assert!(self.instance.is_none());
+        // Sync with instance thread
+        if self.tx_control.send(ControlMessage::UiSync).is_ok() {
+            loop {
+                match self.rx_update.recv() {
+                    Ok(UpdateMessage::UiSynced) => break,
+                    Ok(_) => continue, // TODO: We probably should be processing these
+                    Err(_) => return, // Channel closed
+                }
+            }
+        }
+        core.ui(ctx);
+    }
+
     fn status(&self) -> Status {
         if self.instance.is_some() {
             Status::Paused
         } else if self.join.is_some() {
-            Status::Paused
+            Status::Running
         } else {
             Status::Error
         }
