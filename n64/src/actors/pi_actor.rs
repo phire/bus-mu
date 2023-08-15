@@ -1,7 +1,9 @@
 
 
 use actor_framework::*;
-use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite, WriteFinished}};
+use crate::c_bus::{CBusWrite, CBusRead};
+
+use super::{N64Actors, cpu_actor::{ReadFinished, CpuActor, WriteFinished}};
 
 pub struct PiActor {
     dram_addr: u32,
@@ -50,8 +52,8 @@ impl Actor<N64Actors> for PiActor {
     type OutboxType = PiOutbox;
 }
 
-impl Handler<N64Actors, CpuRegWrite> for PiActor {
-    fn recv(&mut self, outbox: &mut PiOutbox, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CBusWrite> for PiActor {
+    fn recv(&mut self, outbox: &mut PiOutbox, message: CBusWrite, time: Time, _limit: Time) -> SchedulerResult {
         let data = message.data;
         let n = (message.address >> 3) as usize & 1;
         match message.address & 0x3c {
@@ -105,8 +107,8 @@ impl Handler<N64Actors, CpuRegWrite> for PiActor {
     }
 }
 
-impl Handler<N64Actors, CpuRegRead> for PiActor {
-    fn recv(&mut self, outbox: &mut PiOutbox, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CBusRead> for PiActor {
+    fn recv(&mut self, outbox: &mut PiOutbox, message: CBusRead, time: Time, _limit: Time) -> SchedulerResult {
         let n = (message.address >> 3) as usize & 1;
         let data = match message.address & 0x3c {
             0x00 => { // PI_DRAM_ADDR

@@ -3,19 +3,20 @@
 /// CpuActor: Emulates the CPU and MI (Mips Interface)
 
 use actor_framework::{Actor, Time, Handler,  OutboxSend, SchedulerResult, ActorCreate};
-use super::{N64Actors, bus_actor::BusAccept, si_actor::SiActor, pi_actor::{PiActor, self}, vi_actor::ViActor, ai_actor::AiActor, rdp_actor::RdpActor};
+use super::{N64Actors, pi_actor, bus_actor::{BusPair, ReturnBus, request_bus}};
 
 use vr4300;
 
-use crate::actors::{bus_actor::{BusActor, BusRequest}, rsp_actor::{RspActor, self}};
+use crate::{actors::bus_actor::{BusActor, BusRequest}, c_bus::{self, CBus}, d_bus::DBus};
 
 pub struct CpuActor {
     committed_time: Time,
     _cpu_overrun: u32,
     pub cpu_core: vr4300::Core,
-    dmem_imem: Option<Box<[u32; 2048]>>, // 4K DMEM + 4K IMEM
     outstanding_mem_request: Option<vr4300::BusRequest>,
+    req_type: Option<vr4300::RequestType>,
     bus_free: Time,
+    bus: Option<Box<BusPair>>,
     /// tracks how many times `CpuActor::advance` has been called recursively
     /// (It can recurse when we can complete a memory request internally)
     recursion: u32,
@@ -24,11 +25,12 @@ pub struct CpuActor {
 actor_framework::make_outbox!(
     CpuOutbox<N64Actors, CpuActor> {
         bus: BusRequest,
+        bus_return: Box<BusPair>,
         run: CpuRun,
-        reg_write: CpuRegWrite,
-        reg: CpuRegRead,
-        request_rsp_mem: rsp_actor::ReqestMemOwnership,
-        return_rsp_mem: rsp_actor::TransferMemOwnership,
+        reg_write: c_bus::CBusWrite,
+        reg: c_bus::CBusRead,
+        request_resource: c_bus::ResourceRequest,
+        return_resource: c_bus::Resource,
         pi_read: pi_actor::PiRead,
         pi_write: pi_actor::PiWrite,
     }
@@ -98,17 +100,51 @@ impl CpuActor {
         };
     }
 
+    fn start_c_bus(&mut self, outbox: &mut CpuOutbox, reason: vr4300::BusRequest, time: Time, limit: Time) -> SchedulerResult {
+        use c_bus::RegBusResult::*;
+        use vr4300::BusRequest::*;
+
+        let bus = self.bus.as_mut().unwrap();
+
+        match reason {
+            BusRead32(req_type, address) => {
+                match bus.c_bus.cpu_read(outbox, address, time) {
+                    ReadCompleted(data) => self.finish_read32(outbox, req_type, data, time, limit),
+                    WriteCompleted => unreachable!(),
+                    Unmapped => todo!("Unmapped"),
+                    Dispatched => {
+                        self.req_type = Some(req_type);
+                        SchedulerResult::Ok
+                    }
+                }
+            }
+            BusWrite32(_, address, data) => {
+                match bus.c_bus.cpu_write(outbox, address, data, time) {
+                    WriteCompleted => self.finish_write32(outbox, time, limit),
+                    ReadCompleted(_) => unreachable!(),
+                    Unmapped => todo!("Unmapped"),
+                    Dispatched => SchedulerResult::Ok,
+                }
+            }
+            _ => todo!("Wrong request type")
+        }
+    }
+
     fn start_request(&mut self, outbox: &mut CpuOutbox, request: vr4300::BusRequest, limit: Time) -> SchedulerResult {
-        self.outstanding_mem_request = Some(request);
         let request_time = core::cmp::max(self.bus_free, self.committed_time);
 
-        return if self.recursion < RECURSION_LIMIT && request_time < limit {
-            // If nothing else needs to run before this request, we know we will win bus arbitration
-            // and we can avoid the scheduler
-            self.recv(outbox, BusAccept{}, request_time.add(1), limit)
-        } else {
-            outbox.send::<BusActor>(BusRequest::new::<Self>(1), request_time);
-            SchedulerResult::Ok
+        match self.bus {
+            None => {
+                self.outstanding_mem_request = Some(request);
+                request_bus(outbox, limit)
+            }
+            Some(_) => {
+                if request.address() < 0x0400_0000 {
+                    todo!("RAMBUS");
+                } else {
+                    self.start_c_bus(outbox, request, request_time, limit)
+                }
+            }
         }
     }
 
@@ -164,6 +200,7 @@ impl CpuActor {
     }
 
     #[inline(always)]
+    #[allow(unused)]
     fn debug_check_finish_mem(req_type: vr4300::RequestType, mem_finished: MemFinished) {
         use vr4300::RequestType::*;
         match mem_finished {
@@ -239,8 +276,9 @@ impl ActorCreate<N64Actors> for CpuActor {
             committed_time: Default::default(),
             _cpu_overrun: 0,
             cpu_core: Default::default(),
-            dmem_imem: None,
             outstanding_mem_request: None,
+            bus: Some(Box::new(BusPair { c_bus: CBus::new(), d_bus: DBus::new() })),
+            req_type: None,
             bus_free: Default::default(),
             recursion: 0,
         }
@@ -254,13 +292,13 @@ impl Handler<N64Actors, ReadFinished> for CpuActor {
 
         // PERF: Should we put outstanding_mem_request inside the ReadFinshed message?
         //       That would save the None check and panic
-        let request = self.outstanding_mem_request.take().unwrap();
-        Self::debug_check_finish_mem(request.request_type(), MemFinished::Read(message.clone()));
+        //Self::debug_check_finish_mem(request.request_type(), MemFinished::Read(message.clone()));
 
         // PERF: We should do separate handlers for each length, save the dispatch
         match message.length {
             CpuLength::Word => {
-                self.finish_read32(outbox, request.request_type(), message.data[0], time, limit)
+                let req_type = self.req_type.take().unwrap();
+                self.finish_read32(outbox, req_type, message.data[0], time, limit)
             }
             CpuLength::Dword => {
                 self.finish_read64(outbox, message.data[0..1].try_into().unwrap(), time, limit)
@@ -279,9 +317,6 @@ impl Handler<N64Actors, WriteFinished> for CpuActor {
     #[inline(always)]
     fn recv(&mut self, outbox: &mut CpuOutbox, message: WriteFinished, time: Time, limit: Time) -> SchedulerResult {
         self.recursion = 0; // Reset recursion
-
-        let mem_req = self.outstanding_mem_request.take().unwrap();
-        Self::debug_check_finish_mem(mem_req.request_type(), MemFinished::Write(message.clone()));
 
         // PERF: We should do separate handlers for each length, save the dispatch
         match message.length {
@@ -309,131 +344,17 @@ impl Handler<N64Actors, CpuRun> for CpuActor {
     }
 }
 
-pub struct CpuRegRead {
-    pub address: u32
-}
+impl Handler<N64Actors, Box<BusPair>> for CpuActor {
+    fn recv(&mut self, outbox: &mut CpuOutbox, bus: Box<BusPair>, time: Time, limit: Time) -> SchedulerResult {
+        let request = self.outstanding_mem_request.clone().unwrap();
 
-pub struct CpuRegWrite {
-    pub address: u32,
-    pub data: u32
-}
-
-impl CpuActor {
-    fn do_reg<Dest>(&mut self, outbox: &mut CpuOutbox, reason: vr4300::BusRequest, time: Time)
-    where
-        Dest: Handler<N64Actors, CpuRegRead>
-            + Handler<N64Actors, CpuRegWrite>
-    {
-        match reason {
-            vr4300::BusRequest::BusRead32(_, address) => {
-                outbox.send::<Dest>(CpuRegRead { address: address }, time);
-            }
-            vr4300::BusRequest::BusWrite32(_, address, data) => {
-                outbox.send::<Dest>(CpuRegWrite { address: address, data: data }, time);
-            }
-            _ => { todo!("handle incorrectly sized bus operations") }
-        }
-    }
-
-    fn do_rspmem(&mut self, outbox: &mut CpuOutbox, request: vr4300::BusRequest, time: Time, limit: Time) -> SchedulerResult {
-        if let Some(mem) = self.dmem_imem.as_mut() {
-            let offset = ((request.address() & 0x1ffc) >> 2) as usize;
-            return match request {
-                vr4300::BusRequest::BusRead32(req_type, _) => {
-                    let data = mem[offset];
-                    self.finish_read32(outbox, req_type, data, time, limit)
-                }
-                vr4300::BusRequest::BusWrite32(_, _, data) => {
-                    mem[offset] = data;
-                    self.finish_write32(outbox, time, limit)
-                }
-                _ => { todo!("handle incorrectly sized bus operations") }
-            }
+        self.recursion = 0;
+        self.bus = Some(bus);
+        if request.address() < 0x0400_0000 {
+            todo!("RAMBUS")
         } else {
-            // The CPU doesn't currently have ownership of imem/dmem, need to request it from RspActor
-            self.outstanding_mem_request = Some(request);
-            outbox.send::<RspActor>(rsp_actor::ReqestMemOwnership {}, time);
-
-            return SchedulerResult::Ok;
+            self.start_c_bus(outbox, request, time, limit)
         }
-    }
-}
-
-impl Handler<N64Actors, BusAccept> for CpuActor {
-    fn recv(&mut self, outbox: &mut CpuOutbox, _: BusAccept, time: Time, limit: Time) -> SchedulerResult {
-        assert!(outbox.is_empty());
-
-        let reason = self.outstanding_mem_request.clone().unwrap();
-        let address = reason.address();
-
-        match address & 0xfff0_0000 {
-            0x0000_0000..=0x03ff_ffff => { // RDRAM
-                todo!("RDRAM")
-            }
-            0x0400_0000 => match address & 0x040c_0000 { // RSP
-                0x0400_0000 if address & 0x1000 == 0 => { // DMEM Direct access
-                    //println!("DMEM access {}", reason);
-                    return self.do_rspmem(outbox, reason, time, limit);
-                }
-                0x0400_0000 if address & 0x1000 != 0 => { // IMEM Direct access
-                    //println!("IMEM access {}", reason);
-                    return self.do_rspmem(outbox, reason, time, limit);
-                }
-                0x0404_0000 | 0x0408_0000 => { // RSP Register
-                    self.do_reg::<RspActor>(outbox, reason, time);
-                }
-                0x040c_0000 => { // Unmapped {
-                    todo!("Unmapped")
-                }
-                _ => unreachable!()
-            }
-            0x0410_0000 => { // RDP Command Regs
-                self.do_reg::<RdpActor>(outbox, reason, time);
-            }
-            0x0420_0000 => {
-                todo!("RDP Span Regs")
-            }
-            0x0430_0000 => {
-                todo!("MIPS Interface")
-            }
-            0x0440_0000 => { // Video Interface
-                self.do_reg::<ViActor>(outbox, reason, time);
-            }
-            0x0450_0000 => { // Audio Interface
-                self.do_reg::<AiActor>(outbox, reason, time);
-            }
-            0x0460_0000 => { // Peripheral Interface
-                self.do_reg::<PiActor>(outbox, reason, time);
-            }
-            0x0470_0000 => {
-                todo!("RDRAM Interface")
-            }
-            0x0480_0000 => { // Serial Interface
-                self.do_reg::<SiActor>(outbox, reason, time);
-            }
-            0x0490_0000..=0x04ff_ffff => {
-                todo!("Unmapped")
-            }
-            0x1fc0_0000 => { // SI External Bus
-                self.do_reg::<SiActor>(outbox, reason, time);
-            }
-            0x0500_0000..=0x7fff_0000 => { // PI External bus
-                match reason {
-                    vr4300::BusRequest::BusRead32(_, _) => {
-                        outbox.send::<PiActor>(pi_actor::PiRead::new(address), time);
-                    }
-                    vr4300::BusRequest::BusWrite32(_, _, data) => {
-                        outbox.send::<PiActor>(pi_actor::PiWrite::new(address, data), time);
-                    }
-                    _ => { panic!("unexpected bus operation") }
-                }
-            }
-            0x8000_0000..=0xffff_ffff => {
-                todo!("Unmapped")
-            }
-            _ => unreachable!()
-        }
-        SchedulerResult::Ok
     }
 }
 
@@ -494,51 +415,49 @@ enum MemFinished {
 }
 
 impl WriteFinished {
-    pub fn word() -> Self {
-        Self {
-            length: CpuLength::Word
-        }
-    }
-    pub fn dword() -> Self {
-        Self {
-            length: CpuLength::Dword
-        }
-    }
-    pub fn qword() -> Self {
-        Self {
-            length: CpuLength::Qword
-        }
-    }
-    pub fn octword() -> Self {
-        Self {
-            length: CpuLength::Octword
-        }
-    }
+    pub fn word() -> Self { Self { length: CpuLength::Word }}
+    pub fn dword() -> Self { Self { length: CpuLength::Dword } }
+    pub fn qword() -> Self { Self { length: CpuLength::Qword } }
+    pub fn octword() -> Self { Self { length: CpuLength::Octword } }
+    pub fn length(&self) -> u64 { self.length as u64 }
+}
 
-    pub fn length(&self) -> u64 {
-        self.length as u64
+impl Handler<N64Actors, c_bus::Resource> for CpuActor {
+    fn recv(&mut self, outbox: &mut CpuOutbox, resource: c_bus::Resource, time: Time, limit: Time) -> SchedulerResult {
+        use c_bus::RegBusResult;
+
+        self.recursion = 0; // Reset recursion
+        let bus = self.bus.as_mut().expect("Should own Bus");
+
+        // If a resource was requested, we must own c_bus
+        match bus.c_bus.receive_resource(outbox, resource, time) {
+            RegBusResult::WriteCompleted => {
+                self.finish_write32(outbox, time, limit)
+            }
+            RegBusResult::ReadCompleted(data) => {
+                let req_type = self.req_type.take().unwrap();
+                self.finish_read32(outbox, req_type, data, time, limit)
+            }
+            RegBusResult::Dispatched => {
+                SchedulerResult::Ok
+            }
+            RegBusResult::Unmapped => {
+                todo!("Unmapped")
+            }
+        }
     }
 }
 
-impl Handler<N64Actors, rsp_actor::TransferMemOwnership> for CpuActor {
-    fn recv(&mut self, outbox: &mut CpuOutbox, message: rsp_actor::TransferMemOwnership, time: Time, limit: Time) -> SchedulerResult {
-        self.dmem_imem = Some(message.mem);
-
-        // We can now complete the memory request to imem or dmem
-        let reason = self.outstanding_mem_request.clone().unwrap();
-        self.do_rspmem(outbox, reason, time, limit);
-
-        SchedulerResult::Ok
+impl Handler<N64Actors, ReturnBus> for CpuActor {
+    fn recv(&mut self, outbox: &mut Self::OutboxType, _: ReturnBus, time: Time, _limit: Time) -> SchedulerResult {
+        outbox.send::<BusActor>(self.bus.take().unwrap(), time)
     }
 }
 
-impl Handler<N64Actors, rsp_actor::ReqestMemOwnership> for CpuActor {
-    fn recv(&mut self, outbox: &mut CpuOutbox, _: rsp_actor::ReqestMemOwnership, time: Time, _limit: Time) -> SchedulerResult {
-        let msg = rsp_actor::TransferMemOwnership {
-            mem: self.dmem_imem.take().unwrap(),
-        };
-
-        outbox.send::<RspActor>(msg, time.add(4));
+impl Handler<N64Actors, c_bus::ResourceReturnRequest> for CpuActor {
+    fn recv(&mut self, outbox: &mut CpuOutbox, request: c_bus::ResourceReturnRequest, time: Time, _limit: Time) -> SchedulerResult {
+        let bus = self.bus.as_mut().expect("Should own CBus");
+        bus.c_bus.return_resource(outbox, request, time);
 
         SchedulerResult::Ok
     }

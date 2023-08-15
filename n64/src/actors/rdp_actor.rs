@@ -1,9 +1,9 @@
 
 use actor_framework::*;
 
-use crate::N64Actors;
+use crate::{N64Actors, c_bus::{CBusWrite, CBusRead}};
 
-use super::cpu_actor::{ReadFinished, WriteFinished, CpuRegWrite, CpuRegRead, CpuActor};
+use super::cpu_actor::{ReadFinished, WriteFinished, CpuActor};
 
 pub struct RdpActor {
     start: u32,
@@ -30,8 +30,8 @@ impl Actor<N64Actors> for RdpActor {
     type OutboxType = RdpOutbox;
 }
 
-impl Handler<N64Actors, CpuRegWrite> for RdpActor {
-    fn recv(&mut self, outbox: &mut RdpOutbox, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CBusWrite> for RdpActor {
+    fn recv(&mut self, outbox: &mut RdpOutbox, message: CBusWrite, time: Time, _limit: Time) -> SchedulerResult {
         let data = message.data;
         match message.address & 0x1c {
             0x00 => { // DP_START
@@ -68,8 +68,8 @@ impl Handler<N64Actors, CpuRegWrite> for RdpActor {
     }
 }
 
-impl Handler<N64Actors, CpuRegRead> for RdpActor {
-    fn recv(&mut self, outbox: &mut RdpOutbox, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CBusRead> for RdpActor {
+    fn recv(&mut self, outbox: &mut RdpOutbox, message: CBusRead, time: Time, _limit: Time) -> SchedulerResult {
         let data = match message.address & 0x1c {
             0x00 => { // DP_START
                 println!("RDP read DP_START = {:#010x}", self.start);

@@ -1,24 +1,24 @@
-use crate::{MakeNamed, Handler, Actor, Time, Endpoint, MessagePacket, channel::Channel};
+use crate::{MakeNamed, Handler, Actor, Time, Endpoint, MessagePacket, channel::Channel, SchedulerResult};
 
 
 pub trait Outbox<ActorNames>
 where
     ActorNames: MakeNamed,
 {
-    type Sender;
+    type Sender: Actor<ActorNames>;
     fn time(&self) -> Time;
     //fn as_proxy<'a>(&'a mut self) -> &'a mut MessagePacketProxy<ActorNames>;
 }
 
-pub trait OutboxSend<ActorNames, Message> : Outbox<ActorNames>
+pub trait OutboxSend<ActorNames, Message>
 where
     ActorNames: MakeNamed,
 {
-    fn send<Receiver>(&mut self, message: Message, time: Time)
+    fn send<Receiver>(&mut self, message: Message, time: Time) -> SchedulerResult
     where
         Receiver: Handler<ActorNames, Message> + Actor<ActorNames>
     ;
-    fn send_channel<Sender>(&mut self, channel: Channel<ActorNames, Sender, Message>, message: Message, time: Time)
+    fn send_channel<Sender>(&mut self, channel: Channel<ActorNames, Sender, Message>, message: Message, time: Time) -> SchedulerResult
     where
         Sender: Actor<ActorNames>,
         Self: Outbox<ActorNames, Sender=Sender>,
@@ -87,9 +87,7 @@ macro_rules! make_outbox {
             }
         }
 
-        impl<ActorNames> actor_framework::Outbox<ActorNames> for $name
-        where
-            ActorNames: actor_framework::MakeNamed,
+        impl actor_framework::Outbox<$name_type> for $name
         {
             type Sender = $sender;
             fn time(&self) -> actor_framework::Time {
@@ -115,7 +113,7 @@ macro_rules! make_outbox {
                 $name_type: actor_framework::MakeNamed,
             {
                 #[inline(always)]
-                fn send<Receiver>(&mut self, message: $field_type, time: actor_framework::Time)
+                fn send<Receiver>(&mut self, message: $field_type, time: actor_framework::Time) -> SchedulerResult
                 where
                     Receiver: actor_framework::Handler<$name_type, $field_type> + actor_framework::Actor<$name_type>
                 {
@@ -124,10 +122,11 @@ macro_rules! make_outbox {
                     self.$field_ident = core::mem::ManuallyDrop::new(actor_framework::MessagePacket::new::<
                         <Self as actor_framework::Outbox<$name_type>>::Sender,
                         Receiver>(time, message));
+                    SchedulerResult::Ok
                 }
 
                 #[inline(always)]
-                fn send_channel<Sender>(&mut self, channel: actor_framework::Channel<$name_type, Sender, $field_type>, message: $field_type, time: actor_framework::Time)
+                fn send_channel<Sender>(&mut self, channel: actor_framework::Channel<$name_type, Sender, $field_type>, message: $field_type, time: actor_framework::Time) -> SchedulerResult
                 where
                     Sender: actor_framework::Actor<$name_type>,
                     Self: actor_framework::Outbox<$name_type, Sender=Sender>,
@@ -136,6 +135,7 @@ macro_rules! make_outbox {
 
                     self.$field_ident = core::mem::ManuallyDrop::new(
                         actor_framework::MessagePacket::from_channel(channel, message, time));
+                    SchedulerResult::Ok
                 }
 
                 #[inline(always)]

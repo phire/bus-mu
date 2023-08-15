@@ -29,7 +29,7 @@ impl Actor<N64Actors> for PifActor {
     type OutboxType = PifOutbox;
 
     #[inline(always)]
-    fn message_delivered(&mut self, outbox: &mut PifOutbox, _: Time) {
+    fn delivering<Message>(&mut self, outbox: &mut PifOutbox, _: &Message, _: Time) {
         let time = self.pif_time;
         outbox.send::<Self>(PifHleMain{}, time);
     }
@@ -62,26 +62,25 @@ impl ActorCreate<N64Actors> for PifActor {
 
 impl PifActor {
     fn read_word(&mut self, addr: usize) -> u32 {
-        match addr & 0x1ff {
-            0..=495 if self.enable_rom => self.pif_mem[addr],
-            496..=511 => self.pif_mem[addr],
+        let offet = addr & 0x1ff;
+        match offet {
+            0..=495 if self.enable_rom => self.pif_mem[offet],
+            496..=511 => self.pif_mem[offet],
             _ => 0, // ROM returns zeros when disabled
         }
     }
 
-    fn read(&mut self, outbox: &mut PifOutbox, time: Time) {
-        match self.burst {
-            false => {
-                let data = self.read_word(self.addr as usize);
-                println!("PIF: Read {:08x} from {:04x}", data, self.addr);
-                outbox.send::<SiActor>(SiPacket::Data4(data), time);
-            }
-            true => {
-                let data: [u32; 16] = core::array::from_fn(|i| {
-                    self.read_word(self.addr as usize + i)
-                });
-                outbox.send::<SiActor>(SiPacket::Data64(data), time);
-            }
+    fn read(&mut self, outbox: &mut PifOutbox, time: Time) -> SchedulerResult {
+        if self.burst {
+            let data: [u32; 16] = core::array::from_fn(|i| {
+                self.read_word(self.addr as usize + i)
+            });
+            outbox.send::<SiActor>(SiPacket::Data64(data), time)
+        } else {
+            let data = self.read_word(self.addr as usize);
+            println!("PIF: Read {:08x} from {:04x}", data, self.addr);
+            outbox.send::<SiActor>(SiPacket::Data4(data), time)
+
         }
     }
 
@@ -124,6 +123,7 @@ impl Handler<N64Actors, SiPacket> for PifActor {
                         (pif::Dir::Read, pif::Size::Size4)
                     }
                     SiPacket::Read64(addr) => {
+                        println!("PIF: Read64 {:04x}", addr);
                         self.addr = addr;
                         self.state = PifState::WaitAck;
                         self.burst = true;
@@ -165,7 +165,7 @@ impl Handler<N64Actors, SiPacket> for PifActor {
             PifState::WaitAck => match message {
                 SiPacket::Ack => {
                     self.state = PifState::WaitCmd;
-                    self.read(outbox, time);
+                    self.read(outbox, time)
                 }
                 _ => panic!("Unexpected message {:?}", message),
             }
@@ -183,12 +183,11 @@ impl Handler<N64Actors, SiPacket> for PifActor {
                     _ => panic!("Unexpected message {:?}", message),
                 }
 
-                outbox.send::<SiActor>(SiPacket::Finish, time);
                 self.state = PifState::WaitCmd;
+                outbox.send::<SiActor
+                >(SiPacket::Finish, time)
             }
         }
-
-        SchedulerResult::Ok
     }
 }
 

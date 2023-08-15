@@ -1,5 +1,7 @@
 use actor_framework::*;
-use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite, WriteFinished}};
+use crate::c_bus::{CBusRead, CBusWrite, self};
+
+use super::{N64Actors, cpu_actor::{ReadFinished, CpuActor, WriteFinished}};
 
 pub struct RspActor {
     halted: bool,
@@ -11,7 +13,8 @@ make_outbox!(
     RspOutbox<N64Actors, RspActor> {
         cpu: ReadFinished,
         cpu_w: WriteFinished,
-        send_mem: TransferMemOwnership,
+        send_mem: c_bus::Resource,
+        request_mem: c_bus::ResourceReturnRequest,
     }
 );
 
@@ -31,8 +34,8 @@ impl Actor<N64Actors> for RspActor {
     type OutboxType = RspOutbox;
 }
 
-impl Handler<N64Actors, CpuRegRead> for RspActor {
-    fn recv(&mut self, outbox: &mut RspOutbox, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CBusRead> for RspActor {
+    fn recv(&mut self, outbox: &mut RspOutbox, message: CBusRead, time: Time, _limit: Time) -> SchedulerResult {
         let address = message.address;
         let data = match address {
             0x0404_0000 => { // SP_DMA_SPADDR
@@ -78,8 +81,8 @@ fn deinterlave8(mut data: u32) -> u32 {
     (data | data >> 4) & 0x00ff
 }
 
-impl Handler<N64Actors, CpuRegWrite> for RspActor {
-    fn recv(&mut self, outbox: &mut RspOutbox, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CBusWrite> for RspActor {
+    fn recv(&mut self, outbox: &mut RspOutbox, message: CBusWrite, time: Time, _limit: Time) -> SchedulerResult {
         let data = message.data;
         match message.address {
             0x0404_0000 => { // SP_DMA_SPADDR
@@ -149,30 +152,31 @@ impl Handler<N64Actors, CpuRegWrite> for RspActor {
     }
 }
 
+impl Handler<N64Actors, c_bus::Resource> for RspActor {
+    fn recv(&mut self, _outbox: &mut RspOutbox, message: c_bus::Resource, _time: Time, _limit: Time) -> SchedulerResult {
 
-pub(super) struct ReqestMemOwnership {}
-
-pub(super) struct TransferMemOwnership {
-    pub mem: Box<[u32; 2048]>,
-}
-
-impl Handler<N64Actors, TransferMemOwnership> for RspActor {
-    fn recv(&mut self, _outbox: &mut RspOutbox, message: TransferMemOwnership, _time: Time, _limit: Time) -> SchedulerResult {
-        self.dmem_imem = Some(message.mem);
+        match message {
+            c_bus::Resource::RspMem(mem) => {
+                self.dmem_imem = Some(mem);
+            }
+            //_ => panic!("RSP received unexpected resource"),
+        }
 
         // TODO: If the RSP is running, we need to continue it
         SchedulerResult::Ok
     }
 }
 
-impl Handler<N64Actors, ReqestMemOwnership> for RspActor {
-    fn recv(&mut self, outbox: &mut RspOutbox, _message: ReqestMemOwnership, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, c_bus::ResourceRequest> for RspActor {
+    fn recv(&mut self, outbox: &mut RspOutbox, message: c_bus::ResourceRequest, time: Time, _limit: Time) -> SchedulerResult {
         // TODO: calculate timings for when RSP is busy
         // TODO: Handle cases where the RSP DMA is active (which apparently corrupts CPU accesses)
-        outbox.send::<CpuActor>(TransferMemOwnership {
-            mem: self.dmem_imem.take().unwrap(),
-        }, time);
-
+        match message {
+            c_bus::ResourceRequest::RspMem => {
+                outbox.send::<CpuActor>(c_bus::Resource::RspMem(self.dmem_imem.take().unwrap()), time);
+            }
+            //_ => panic!("RSP received unexpected resource request"),
+        }
         SchedulerResult::Ok
     }
 }

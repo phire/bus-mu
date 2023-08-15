@@ -3,6 +3,8 @@ pub mod actors;
 
 pub mod cic;
 pub mod pif;
+mod c_bus;
+mod d_bus;
 
 pub use actors::N64Actors;
 

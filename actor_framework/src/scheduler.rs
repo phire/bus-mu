@@ -33,6 +33,9 @@ use crate::{object_map::{ObjectStore, ObjectStoreView}, Time, MakeNamed, Actor, 
 //     Instead, we should actually copy those out of the outbox and into the linked list queue or cache
 //     Should make both find_next_cached and queue_add faster, and allow us to remove some stupid unsafe code
 
+// Update: Actually, bus_actor *might* depend on messages sent on the same cycle being delivered in a
+//         FIFO order. Which would limits queue options.
+
 const CACHE_SIZE: usize = 2;
 const UNCACHED: u8 = CACHE_SIZE as u8;
 
@@ -568,21 +571,25 @@ impl<ActorNames> Scheduler<ActorNames> where
         actor.outbox.as_packet().and_then(|p| { p.take() })
     }
 
-    fn execute_message<Sender, Receiver, Message>(&mut self, msg: Message, time: Time, limit: Time) -> SchedulerResult
+    fn execute_message<Sender, Receiver, Message>(&mut self, msg: Message, time: Time, mut limit: Time) -> SchedulerResult
     where
         Sender: Actor<ActorNames>,
         Receiver: Actor<ActorNames> + Handler<ActorNames, Message>,
+        Message: 'static,
     {
+        let sender = self.actors.get::<Sender>();
+        let before_delivered = sender.outbox.time();
+        sender.obj.delivering(&mut sender.outbox, &msg, time);
+        let after_delivered = sender.outbox.time();
+
+        // Update limit to take into account any new messages from sender
+        limit = std::cmp::min(limit, after_delivered);
+
         let receiver = self.actors.get::<Receiver>();
 
         let before = receiver.outbox.time();
         let result = receiver.obj.recv(&mut receiver.outbox, msg, time, limit);
         let after = receiver.outbox.time();
-
-        let sender = self.actors.get::<Sender>();
-        let before_delivered = sender.outbox.time();
-        sender.obj.message_delivered(&mut sender.outbox, time);
-        let after_delivered = sender.outbox.time();
 
         if cfg!(feature = "cached") {
             if self.is_cached[Receiver::name()] != UNCACHED {
@@ -659,13 +666,13 @@ impl<ActorNames> Scheduler<ActorNames> where
     fn execute_message_self<Receiver, Message>(&mut self, msg: Message, time: Time, limit: Time) -> SchedulerResult
     where
         Receiver: Actor<ActorNames> + Handler<ActorNames, Message>,
+        Message: 'static,
     {
         let actor = self.actors.get::<Receiver>();
 
         let before = actor.outbox.time();
-
+        actor.obj.delivering(&mut actor.outbox, &msg, time);
         let result = actor.obj.recv(&mut actor.outbox, msg, time, limit);
-        actor.obj.message_delivered(&mut actor.outbox, time);
         let after = actor.outbox.time();
 
         if cfg!(feature = "cached") {

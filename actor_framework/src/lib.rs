@@ -1,47 +1,54 @@
-
 mod actor_box;
 mod addr;
 mod channel;
 mod endpoint;
+mod enum_map;
 mod message_packet;
+mod named;
+mod object_map;
+mod outbox;
 mod scheduler;
 mod time;
-mod enum_map;
-mod object_map;
-mod named;
-mod outbox;
+mod time_queue;
 
 use std::sync::mpsc;
 
 pub use actor_box::{ActorBox, ActorBoxBase, AsBase};
 pub use addr::Addr;
 pub use channel::Channel;
-use common::{UpdateMessage, ControlMessage};
+use common::{ControlMessage, UpdateMessage};
 pub use endpoint::Endpoint;
-pub use named::{Named, MakeNamed};
-pub use named_derive::Named;
-pub use time::Time;
+pub use enum_map::EnumMap;
 pub use message_packet::{MessagePacket, MessagePacketProxy};
+pub use named::{MakeNamed, Named};
+pub use named_derive::Named;
 pub use outbox::{Outbox, OutboxSend};
 pub use scheduler::{Scheduler, SchedulerResult};
-pub use enum_map::EnumMap;
+pub use time::Time;
+pub use time_queue::TimeQueue;
 
-pub trait Actor<ActorNames> : Named<ActorNames>
+pub trait Actor<ActorNames>: Named<ActorNames>
 where
     ActorNames: MakeNamed,
     Self::OutboxType: Outbox<ActorNames>,
 {
     type OutboxType;
 
-    /// `message_delivered` is called immediately after the scheduler delivered this actor's previous message.
+    /// `delivering` is called just before the scheduler delivers a message
     ///
-    /// Useful for actors that need to send multiple messages at once, or restore message
-    /// that was previously interrupted
+    /// The message has already been removed from the outbox, allowing the actor to send
+    /// a new message, or restore the a previous message that was interrupted.
     #[inline(always)]
-    fn message_delivered(&mut self, _outbox: &mut Self::OutboxType, _time: Time) { }
+    fn delivering<Message>(&mut self, outbox: &mut Self::OutboxType, message: &Message, time: Time)
+    where
+        Message: 'static,
+    {
+        // Default implementation: do nothing
+        let _ = (outbox, message, time);
+    }
 }
 
-pub trait ActorCreate<ActorNames> : Actor<ActorNames>
+pub trait ActorCreate<ActorNames>: Actor<ActorNames>
 where
     ActorNames: MakeNamed,
     Self::OutboxType: Outbox<ActorNames>,
@@ -50,29 +57,41 @@ where
 }
 
 impl<ActorNames, T> ActorCreate<ActorNames> for T
- where ActorNames: MakeNamed,
-       T: Actor<ActorNames> + Default,
- {
+where
+    ActorNames: MakeNamed,
+    T: Actor<ActorNames> + Default,
+{
     fn new(_outbox: &mut Self::OutboxType, _time: Time) -> T {
         T::default()
     }
- }
+}
 
-pub trait Handler<ActorNames, M> : Actor<ActorNames>
+pub trait Handler<ActorNames, M>: Actor<ActorNames>
 where
     ActorNames: MakeNamed,
 {
-    fn recv(&mut self, outbox: &mut Self::OutboxType, message: M, time: Time, limit: Time) -> SchedulerResult
+    fn recv(
+        &mut self,
+        outbox: &mut Self::OutboxType,
+        message: M,
+        time: Time,
+        limit: Time,
+    ) -> SchedulerResult
     where
-        Self: Actor<ActorNames> + Sized
-    ;
+        Self: Actor<ActorNames> + Sized;
 }
 
-pub struct Instance<ActorNames> where ActorNames: MakeNamed {
+pub struct Instance<ActorNames>
+where
+    ActorNames: MakeNamed,
+{
     scheduler: Scheduler<ActorNames>,
 }
 
-impl<ActorNames> Instance<ActorNames> where ActorNames: MakeNamed {
+impl<ActorNames> Instance<ActorNames>
+where
+    ActorNames: MakeNamed,
+{
     pub fn new() -> Instance<ActorNames> {
         Instance {
             scheduler: Scheduler::<ActorNames>::new(),
@@ -80,7 +99,8 @@ impl<ActorNames> Instance<ActorNames> where ActorNames: MakeNamed {
     }
 
     pub fn actor<ActorType>(&mut self) -> &mut ActorType
-    where ActorType: Actor<ActorNames>
+    where
+        ActorType: Actor<ActorNames>,
     {
         self.scheduler.get::<ActorType>()
     }
@@ -90,9 +110,10 @@ impl<ActorNames> common::Instance for Instance<ActorNames>
 where
     ActorNames: MakeNamed,
 {
-    fn run(&mut self,
+    fn run(
+        &mut self,
         control_rx: &mpsc::Receiver<ControlMessage>,
-        update: mpsc::SyncSender<UpdateMessage>
+        update: mpsc::SyncSender<UpdateMessage>,
     ) -> Result<(), anyhow::Error> {
         self.scheduler.run(control_rx, update)
     }
@@ -101,5 +122,3 @@ where
         self
     }
 }
-
-

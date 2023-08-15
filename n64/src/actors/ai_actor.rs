@@ -1,7 +1,9 @@
 
 
 use actor_framework::*;
-use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite, WriteFinished}};
+use crate::c_bus::{CBusWrite, CBusRead};
+
+use super::{N64Actors, cpu_actor::{ReadFinished, CpuActor, WriteFinished}};
 
 pub struct AiActor {
     dram_addr: u32,
@@ -30,8 +32,8 @@ impl Actor<N64Actors> for AiActor {
     type OutboxType = AiOutbox;
 }
 
-impl Handler<N64Actors, CpuRegWrite> for AiActor {
-    fn recv(&mut self, outbox: &mut AiOutbox, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CBusWrite> for AiActor {
+    fn recv(&mut self, outbox: &mut AiOutbox, message: CBusWrite, time: Time, _limit: Time) -> SchedulerResult {
         let data = message.data;
         match message.address & 0x1c {
             0x00 => { // AI_DRAM_ADDR
@@ -65,8 +67,8 @@ impl Handler<N64Actors, CpuRegWrite> for AiActor {
     }
 }
 
-impl Handler<N64Actors, CpuRegRead> for AiActor {
-    fn recv(&mut self, outbox: &mut AiOutbox, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CBusRead> for AiActor {
+    fn recv(&mut self, outbox: &mut AiOutbox, message: CBusRead, time: Time, _limit: Time) -> SchedulerResult {
         let data = match message.address & 0x1c {
             0x00 => { // AI_DRAM_ADDR
                 println!("read AI_DRAM_ADDR");

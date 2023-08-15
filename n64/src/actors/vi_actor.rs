@@ -1,5 +1,7 @@
 use actor_framework::*;
-use super::{N64Actors, cpu_actor::{ReadFinished, CpuRegRead, CpuActor, CpuRegWrite, WriteFinished}};
+use crate::c_bus::{CBusWrite, CBusRead};
+
+use super::{N64Actors, cpu_actor::{ReadFinished, CpuActor, WriteFinished}};
 
 pub struct ViActor {
     origin: u32,
@@ -24,8 +26,8 @@ impl Actor<N64Actors> for ViActor {
     type OutboxType = ViOutbox;
 }
 
-impl Handler<N64Actors, CpuRegWrite> for ViActor {
-    fn recv(&mut self, outbox: &mut ViOutbox, message: CpuRegWrite, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CBusWrite> for ViActor {
+    fn recv(&mut self, outbox: &mut ViOutbox, message: CBusWrite, time: Time, _limit: Time) -> SchedulerResult {
         let data = message.data;
         match message.address & 0x3c {
             0x00 => { // VI_CTRL
@@ -84,8 +86,8 @@ impl Handler<N64Actors, CpuRegWrite> for ViActor {
     }
 }
 
-impl Handler<N64Actors, CpuRegRead> for ViActor {
-    fn recv(&mut self, outbox: &mut ViOutbox, message: CpuRegRead, time: Time, _limit: Time) -> SchedulerResult {
+impl Handler<N64Actors, CBusRead> for ViActor {
+    fn recv(&mut self, outbox: &mut ViOutbox, message: CBusRead, time: Time, _limit: Time) -> SchedulerResult {
         let data = match message.address & 0x3c {
             0x00 => { // VI_CTRL
                 todo!("VI read VI_CTRL");
