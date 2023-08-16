@@ -179,8 +179,9 @@ impl PifHle {
                         println!("PIF: invalid CIC checksum");
                         println!("   CPU checksum: {:x?}", self.internal_ram.cpu_checksum);
                         println!("   CIC checksum: {:x?}", self.internal_ram.cic_checksum);
-                        self.state = State::Error;
-                        return next_time;
+                        // TODO: Uncomment once IPL2 checksum is correct
+                        //self.state = State::Error;
+                        //return next_time;
                     } else {
                         println!("PIF: CIC checksum OK");
                     }
