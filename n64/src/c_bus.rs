@@ -1,6 +1,6 @@
 use actor_framework::{OutboxSend, Time, Handler, Channel, Outbox};
 
-use crate::{N64Actors, actors::{cpu_actor::{CpuOutbox, CpuActor}, rsp_actor::RspActor, rdp_actor::RdpActor, vi_actor::ViActor, ai_actor::AiActor, pi_actor::{PiActor, PiRead, PiWrite}, si_actor::SiActor}};
+use crate::{N64Actors, actors::{cpu_actor::{CpuOutbox, CpuActor}, rsp_actor::RspActor, rdp_actor::RdpActor, vi_actor::ViActor, ai_actor::AiActor, pi_actor::{PiActor, PiRead, PiWrite}, si_actor::SiActor, ri_actor::RiActor}};
 
 /// CBus covers all devices that the CPU can access, other than RDRAM
 /// This includes all MMIO mapped registers and mapped memory (RSP DMEM/IMEM, Cartridge ROM, Pif RAM)
@@ -187,7 +187,7 @@ static HANDLERS : [(ReadFn, WriteFn); 16] = [
     (read_direct::<ViActor>, write_direct::<ViActor>),
     (read_direct::<AiActor>, write_direct::<AiActor>),
     (read_direct::<PiActor>, write_direct::<PiActor>),
-    (read_unimplemented, write_unimplemented),
+    (read_direct::<RiActor>, write_direct::<RiActor>),
     (read_direct::<SiActor>, write_direct::<SiActor>),
     (read_unmapped, write_unmapped),
     (read_unmapped, write_unmapped),

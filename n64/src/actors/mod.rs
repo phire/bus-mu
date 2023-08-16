@@ -9,6 +9,7 @@ pub mod pi_actor;
 pub mod vi_actor;
 pub mod ai_actor;
 pub mod rdp_actor;
+pub mod ri_actor;
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 #[derive(Named)]
@@ -32,6 +33,8 @@ pub enum N64Actors {
     AiActor,
     #[named(class(rdp_actor::RdpActor))]
     RdpActor,
+    #[named(class(ri_actor::RiActor))]
+    RiActor,
     #[named(terminal)]
     Terminal,
     //#[named(class(Dummy1))]

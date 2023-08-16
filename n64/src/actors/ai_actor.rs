@@ -62,8 +62,7 @@ impl Handler<N64Actors, CBusWrite> for AiActor {
             }
             _ => unreachable!()
         }
-        outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
-        SchedulerResult::Ok
+        outbox.send::<CpuActor>(WriteFinished::word(), time.add(4))
     }
 }
 
@@ -101,7 +100,6 @@ impl Handler<N64Actors, CBusRead> for AiActor {
             }
             _ => unreachable!()
         };
-        outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
-        SchedulerResult::Ok
+        outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4))
     }
 }
