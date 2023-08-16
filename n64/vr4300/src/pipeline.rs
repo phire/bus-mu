@@ -638,6 +638,30 @@ impl Pipeline {
                 // HWTEST: same as above
                 ex.hilo[reg as usize] = rf.alu_a;
             }
+            ExMode::CacheOp => {
+                ex.addr = rf.alu_a.wrapping_add(rf.alu_b);
+                let op = rf.writeback_reg;
+                match op {
+                    0b00001 => {
+                        let tag = (ex.addr >> 4) & 0x1ff;
+                        println!("Unimplemented CacheOp - DCache Index_Write_Back_Invalidate: {:03x}", tag);
+                    }
+                    0b01000 => {
+                        let tag = (ex.addr >> 5) & 0x1ff;
+                        println!("Unimplemented CacheOp - ICache Index_Store_Tag: {:03x}", tag);
+                    }
+                    op if op & 0x1 == 0 => {
+                        let tag = (ex.addr >> 5) & 0x1ff;
+                        panic!("Unimplemented CacheOp: ICache {:02x} to {:03x}", op, tag);
+                    }
+                    op if op & 0x1 == 1 => {
+                        let tag = (ex.addr >> 4) & 0x1ff;
+                        panic!("Unimplemented CacheOp: DCache {:02x} to {:03x}", op, tag);
+                    }
+                    op => panic!("Undefined CacheOp: {:02x}", op),
+                }
+                ex.writeback_reg = 0;
+            }
             ExMode::ExUnimplemented => {
                 println!("Unimplemented Exmode");
             }

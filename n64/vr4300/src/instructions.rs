@@ -149,6 +149,9 @@ impl Instruction {
                 Dest::Fpr(f) | Dest::StoreFpr(f) => {
                     args.push(format!("f{}", f));
                 }
+                Dest::CacheOp(op) => {
+                    args.push(format!("{:02x}", op));
+                }
                 Dest::None => {}
             }
 
@@ -170,7 +173,7 @@ impl Instruction {
                     args.push(COP0_REG_NAMES[r.rd() as usize].to_owned());
                 }
                 // Load/Stores
-                LoadBaseImm | StoreBaseImm | LoadFpuBaseImm | StoreFpuBaseImm => {
+                LoadBaseImm | StoreBaseImm | LoadFpuBaseImm | StoreFpuBaseImm | Cache => {
                     args.push(format!(
                         "0x{:#x}({})",
                         i.imm() as i16,
@@ -277,6 +280,7 @@ pub enum Form {
     RegImmBranch(u8),
     RegImmTrap(u8),
     RegImmTrapSigned(u8),
+    Cache,
 
     // RType
     JReg(u8),
@@ -307,6 +311,7 @@ pub enum Dest {
     Fpr(u8),
     Store(u8),
     StoreFpr(u8),
+    CacheOp(u8),
     None,
 }
 
@@ -318,7 +323,7 @@ impl Form {
             RegImm(false) | RegImmTrap(_) => Some(ImmType::Unsinged),
             RegImm(true) | RegImmTrapSigned(_) => Some(ImmType::Signed),
             LoadUpper => Some(ImmType::SignedUpper),
-            LoadBaseImm | StoreBaseImm | LoadFpuBaseImm | StoreFpuBaseImm => Some(ImmType::Offset),
+            LoadBaseImm | StoreBaseImm | LoadFpuBaseImm | StoreFpuBaseImm | Cache => Some(ImmType::Offset),
             _ => None,
         }
     }
@@ -333,6 +338,7 @@ impl Form {
             StoreFpuBaseImm => Dest::StoreFpr(i.rt()),
             JRegLink(_) if r.rd() != 31 => Dest::Gpr(r.rd()),
             ShiftImm(_) | ShiftReg(_) | MoveFrom(_) | RegRegReg(_) => Dest::Gpr(r.rd()),
+            Cache => Dest::CacheOp(r.rt()),
             _ => Dest::None,
         }
     }
@@ -345,7 +351,7 @@ impl Form {
             },
             RegImm(_) | LoadUpper | BranchReg | BranchRegReg | LoadBaseImm | StoreBaseImm
             | LoadFpuBaseImm | StoreFpuBaseImm | RegImmBranch(_) | RegImmTrap(_)
-            | RegImmTrapSigned(_) => {
+            | RegImmTrapSigned(_) | Cache => {
                 Instruction::I(inst.into())
             },
             JReg(_) | JRegLink(_) | ShiftImm(_) | ShiftReg(_) | MoveFrom(_) | MoveTo(_)
@@ -451,6 +457,7 @@ pub enum ExMode {
     MemLinked(u8),
     LoadInternal(InternalReg),
     StoreInternal(InternalReg),
+    CacheOp,
     ExUnimplemented,
 }
 
@@ -535,7 +542,7 @@ const fn build_primary_table() -> [InstructionInfo; 64] {
         Op("SDL", 0x2c, Form::StoreBaseImm, StoreOp, MemLeft(8)),
         Op("SDR", 0x2d, Form::StoreBaseImm, StoreOp, MemRight(8)),
         Op("SWR", 0x2e, Form::StoreBaseImm, StoreOp, MemRight(4)),
-        Unimplemented("Cache", 0x2f),
+        Op("CACHE", 0x2f, Form::Cache, ImmSigned, CacheOp),
         // 6
         Op("LL", 0x30, Form::LoadBaseImm, ImmSigned, MemLinked(4)),
         Unimplemented("LWC1", 0x31),// Form::LoadFpuBaseImm, 0),
