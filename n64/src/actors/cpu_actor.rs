@@ -169,6 +169,8 @@ impl CpuActor {
         self.bus_free = finish_time;
 
         // Advance the CPU upto the finish time
+        // FIXME: The vr4300 actually stalls and doesn't need to do any work...
+        //        Except in caches where this request wasn't triggered by an interlock
         let catchup_result = self.advance(outbox, CpuRun {  }, finish_time);
 
         match &mem_finished {
