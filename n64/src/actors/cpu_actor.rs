@@ -53,6 +53,26 @@ fn to_bus_time(cpu_time: u64, odd: u64) -> u64 {
     cpu_time - ((cpu_time + odd * 2) / 3u64)
 }
 
+fn as_words<const BYTES: usize, const WORDS: usize>(bytes: [u8; BYTES]) -> [u32; WORDS] {
+    assert!(BYTES == WORDS * 4);
+
+    let mut words = [0; WORDS];
+    for i in 0..WORDS {
+        words[i] = u32::from_le_bytes(bytes[i * 4..(i + 1) * 4].try_into().unwrap());
+    }
+    words
+}
+
+fn as_bytes<const BYTES: usize, const WORDS: usize>(words: [u32; WORDS]) -> [u8; BYTES] {
+    assert!(BYTES == WORDS * 4);
+
+    let mut bytes = [0; BYTES];
+    for i in 0..WORDS {
+        bytes[i * 4..(i + 1) * 4].copy_from_slice(&words[i].to_le_bytes());
+    }
+    bytes
+}
+
 impl CpuActor {
     fn advance(&mut self, outbox: &mut CpuOutbox, _: CpuRun, limit: Time) -> SchedulerResult {
         let limit_64: u64 = limit.into();
@@ -100,13 +120,13 @@ impl CpuActor {
         };
     }
 
-    fn start_c_bus(&mut self, outbox: &mut CpuOutbox, reason: vr4300::BusRequest, time: Time, limit: Time) -> SchedulerResult {
+    fn start_c_bus(&mut self, outbox: &mut CpuOutbox, request: vr4300::BusRequest, time: Time, limit: Time) -> SchedulerResult {
         use c_bus::RegBusResult::*;
         use vr4300::BusRequest::*;
 
         let bus = self.bus.as_mut().unwrap();
 
-        match reason {
+        match request {
             BusRead32(req_type, address) => {
                 match bus.c_bus.cpu_read(outbox, address, time) {
                     ReadCompleted(data) => self.finish_read32(outbox, req_type, data, time, limit),
@@ -130,6 +150,58 @@ impl CpuActor {
         }
     }
 
+    fn start_d_bus(&mut self, outbox: &mut CpuOutbox, request: vr4300::BusRequest, time: Time, limit: Time) -> SchedulerResult {
+        use c_bus::RegBusResult::*;
+        use vr4300::BusRequest::*;
+
+        let d_bus = &mut self.bus.as_mut().unwrap().d_bus;
+
+        match request {
+            BusRead32(req_type, addr) => {
+                let (cycles, bytes) = d_bus.read_qwords(addr);
+                self.finish_read32(outbox, req_type, u32::from_le_bytes(bytes), time.add(cycles), limit)
+            }
+            BusRead64(_, addr) => {
+                let (cycles, bytes) = d_bus.read_qwords::<8>(addr);
+                self.finish_read64(outbox, as_words(bytes), time.add(cycles), limit)
+            }
+            BusRead128(_, addr) => {
+                let (cycles, bytes) = d_bus.read_qwords::<16>(addr);
+                self.finish_read128(outbox, &as_words(bytes), time.add(cycles), limit)
+            }
+            BusRead256(_, addr) => {
+                let (cycles, bytes) = d_bus.read_qwords::<32>(addr);
+                self.finish_read256(outbox, &as_words(bytes), time.add(cycles), limit)
+            }
+            // TODO: These should use masks
+            BusWrite8(_, addr, data) => {
+                let cycles = d_bus.write_qwords(addr, [data as u8]);
+                self.finish_write32(outbox, time.add(cycles), limit)
+            }
+            BusWrite16(_, addr, data) => {
+                let cycles = d_bus.write_qwords(addr, (data as u16).to_le_bytes());
+                self.finish_write32(outbox, time.add(cycles), limit)
+            }
+            BusWrite24(_, addr, data) => {
+                let data = data.to_le_bytes()[0..3].try_into().unwrap();
+                let cycles = d_bus.write_qwords::<3>(addr, data);
+                self.finish_write32(outbox, time.add(cycles), limit)
+            }
+            BusWrite32(_, addr, data) => {
+                let cycles = d_bus.write_qwords(addr, data.to_le_bytes());
+                self.finish_write32(outbox, time.add(cycles), limit)
+            }
+            BusWrite64(_, addr, data) => {
+                let cycles = d_bus.write_qwords(addr, data.to_le_bytes());
+                self.finish_write64(outbox, time.add(cycles), limit)
+            }
+            BusWrite128(_, addr, data) => {
+                let cycles = d_bus.write_qwords::<16>(addr, as_bytes(data));
+                self.finish_write128(outbox, time.add(cycles), limit)
+            }
+        }
+    }
+
     fn start_request(&mut self, outbox: &mut CpuOutbox, request: vr4300::BusRequest, limit: Time) -> SchedulerResult {
         let request_time = core::cmp::max(self.bus_free, self.committed_time);
 
@@ -140,7 +212,7 @@ impl CpuActor {
             }
             Some(_) => {
                 if request.address() < 0x0400_0000 {
-                    todo!("RAMBUS");
+                    self.start_d_bus(outbox, request, request_time, limit)
                 } else {
                     self.start_c_bus(outbox, request, request_time, limit)
                 }
