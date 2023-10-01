@@ -2,7 +2,7 @@
 
 /// CpuActor: Emulates the CPU and MI (Mips Interface)
 
-use actor_framework::{Actor, Time, Handler,  OutboxSend, SchedulerResult, ActorCreate};
+use actor_framework::{Actor, Time, Handler,  OutboxSend, SchedulerResult, ActorCreate, Outbox};
 use super::{N64Actors, pi_actor, bus_actor::{BusPair, ReturnBus, request_bus}};
 
 use vr4300;
@@ -20,6 +20,7 @@ pub struct CpuActor {
     /// tracks how many times `CpuActor::advance` has been called recursively
     /// (It can recurse when we can complete a memory request internally)
     recursion: u32,
+    interrupted_msg: CpuOutbox,
 }
 
 actor_framework::make_outbox!(
@@ -341,6 +342,15 @@ impl CpuActor {
 
 impl Actor<N64Actors> for CpuActor {
     type OutboxType = CpuOutbox;
+
+    fn delivering<Message>(&mut self, outbox: &mut Self::OutboxType, _: &Message, _: Time)
+        where
+            Message: 'static,
+    {
+        if std::any::TypeId::of::<Message>() == std::any::TypeId::of::<Box<BusPair>>() {
+            outbox.restore(&mut self.interrupted_msg);
+        }
+    }
 }
 
 impl ActorCreate<N64Actors> for CpuActor {
@@ -355,6 +365,7 @@ impl ActorCreate<N64Actors> for CpuActor {
             req_type: None,
             bus_free: Default::default(),
             recursion: 0,
+            interrupted_msg: Default::default(),
         }
     }
 }
@@ -524,6 +535,8 @@ impl Handler<N64Actors, c_bus::Resource> for CpuActor {
 
 impl Handler<N64Actors, ReturnBus> for CpuActor {
     fn recv(&mut self, outbox: &mut Self::OutboxType, _: ReturnBus, time: Time, _limit: Time) -> SchedulerResult {
+        outbox.stash(&mut self.interrupted_msg);
+
         outbox.send::<BusActor>(self.bus.take().unwrap(), time)
     }
 }

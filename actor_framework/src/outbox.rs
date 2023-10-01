@@ -8,6 +8,8 @@ where
     type Sender: Actor<ActorNames>;
     fn time(&self) -> Time;
     //fn as_proxy<'a>(&'a mut self) -> &'a mut MessagePacketProxy<ActorNames>;
+    fn stash(&mut self, other: &mut Self);
+    fn restore(&mut self, other: &mut Self);
 }
 
 pub trait OutboxSend<ActorNames, Message>
@@ -93,6 +95,14 @@ macro_rules! make_outbox {
             fn time(&self) -> actor_framework::Time {
                 unsafe { self.none.time }
             }
+            fn stash(&mut self, other: &mut Self) {
+                assert!(other.is_empty());
+                *other = core::mem::take(self);
+            }
+            fn restore(&mut self, other: &mut Self) {
+                assert!(self.is_empty());
+                *self = core::mem::take(other);
+            }
             // fn as_proxy<'a>(&'a mut self) -> &'a mut actor_framework::MessagePacketProxy<ActorNames> {
             //     unsafe { core::mem::transmute(&mut self.none) }
             // }
@@ -117,7 +127,7 @@ macro_rules! make_outbox {
                 where
                     Receiver: actor_framework::Handler<$name_type, $field_type> + actor_framework::Actor<$name_type>
                 {
-                    assert!(self.is_empty());
+                    assert!(self.is_empty(), "Sending {}, but {} already contains {}", std::any::type_name::<$field_type>(), std::any::type_name::<Self>(), self.msg_type_name());
 
                     self.$field_ident = core::mem::ManuallyDrop::new(actor_framework::MessagePacket::new::<
                         <Self as actor_framework::Outbox<$name_type>>::Sender,
@@ -131,7 +141,7 @@ macro_rules! make_outbox {
                     Sender: actor_framework::Actor<$name_type>,
                     Self: actor_framework::Outbox<$name_type, Sender=Sender>,
                 {
-                    assert!(self.is_empty());
+                    assert!(self.is_empty(), "Sending {}, but {} already contains {}", std::any::type_name::<$field_type>(), std::any::type_name::<Self>(), self.msg_type_name());
 
                     self.$field_ident = core::mem::ManuallyDrop::new(
                         actor_framework::MessagePacket::from_channel(channel, message, time));
@@ -141,7 +151,7 @@ macro_rules! make_outbox {
                 #[inline(always)]
                 fn send_endpoint(&mut self, endpoint: actor_framework::Endpoint<$name_type, $field_type>, message: $field_type, time: actor_framework::Time)
                 {
-                    assert!(self.is_empty());
+                    assert!(self.is_empty(), "Sending {}, but {} already contains {}", std::any::type_name::<$field_type>(), std::any::type_name::<Self>(), self.msg_type_name());
 
                     self.$field_ident = core::mem::ManuallyDrop::new(
                             actor_framework::MessagePacket::from_endpoint::<
