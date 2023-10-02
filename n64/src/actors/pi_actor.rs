@@ -1,21 +1,31 @@
 
 
-use actor_framework::*;
-use crate::c_bus::{CBusWrite, CBusRead};
+use std::any::TypeId;
 
-use super::{N64Actors, cpu_actor::{ReadFinished, CpuActor, WriteFinished}};
+use actor_framework::*;
+use crate::{c_bus::{CBusWrite, CBusRead}, d_bus::DBus};
+
+use super::{N64Actors, cpu_actor::{ReadFinished, CpuActor, WriteFinished}, bus_actor::{BusPair, request_bus, ReturnBus, BusRequest, BusActor}};
 
 pub struct PiActor {
     dram_addr: u32,
     cart_addr: u32,
+    wr_len: u32,
+    rd_len: u32,
+    dma_status: DmaStatus,
+    queued_dma_event: Time,
     domains: [PiDomain; 2],
     rom: Vec<u16>,
+    bus: Option<Box<BusPair>>,
 }
 
 make_outbox!(
     PiOutbox<N64Actors, PiActor> {
         cpu: ReadFinished,
         cpu_w: WriteFinished,
+        dma: DmaTransfer,
+        bus: BusRequest,
+        return_bus: Box<BusPair>,
     }
 );
 
@@ -32,8 +42,13 @@ impl Default for PiActor {
         Self {
             dram_addr: 0,
             cart_addr: 0,
+            wr_len: 0,
+            rd_len: 0,
+            dma_status: DmaStatus::Idle,
+            queued_dma_event: Time::MAX,
             domains: Default::default(),
             rom,
+            bus: None,
         }
     }
 }
@@ -46,14 +61,79 @@ impl PiActor {
         }
         (self.rom[address] as u32) << 16 | (self.rom[address + 1] as u32)
     }
+
+    fn read_dword(&self, address: u32) -> u64 {
+        let address = (address / 2) as usize;
+        if address >= self.rom.len() {
+            panic!("Read out of bounds: {:#010x}", address);
+        }
+
+        (self.rom[address] as u64) << 48
+          | (self.rom[address + 1] as u64) << 32
+          | (self.rom[address + 2] as u64) << 16
+          | (self.rom[address + 3] as u64)
+    }
+
+    fn domain(&self, addr: u32) -> &PiDomain {
+        match addr {
+            0x0800_0000..=0x0fff_ffff => &self.domains[1], // Cartridge SRAM/FlashRAM (Domain 2)
+            _ => &self.domains[0], // Everything else is Domain 1 (or unreachable)
+        }
+    }
+
+    fn dma_page_bytes(&self) -> u32 {
+        let bytes = match self.dma_status {
+            DmaStatus::Idle => 0,
+            DmaStatus::Writing => self.wr_len + 1,
+            DmaStatus::Reading => self.rd_len + 1,
+        };
+
+        let domain = self.domain(self.cart_addr);
+        domain.clamped_bytes(self.cart_addr, bytes)
+    }
+
+    fn dma_event_time(&self, time: Time) -> Time {
+        let domain = self.domain(self.cart_addr);
+        let bytes = self.dma_page_bytes();
+
+        assert!(bytes % 2 == 0); // TODO, what happens here
+
+        if bytes == 0 {
+            Time::MAX
+        } else {
+            let cycles = domain.calc_cycles(self.cart_addr, bytes as u64 / 2);
+            time.add(cycles)
+        }
+    }
+
+    fn clear_outbox(&mut self, outbox: &mut PiOutbox) {
+        if let Some((dma_time, _)) = outbox.try_cancel::<DmaTransfer>() {
+            self.queued_dma_event = dma_time;
+        }
+
+        assert!(outbox.is_empty());
+    }
 }
 
 impl Actor<N64Actors> for PiActor {
     type OutboxType = PiOutbox;
+
+    #[inline(always)]
+    fn delivering<Message>(&mut self, outbox: &mut PiOutbox, _: &Message, _: Time)
+    where
+        Message: 'static,
+    {
+        if TypeId::of::<Message>() != TypeId::of::<DmaTransfer>() && self.queued_dma_event != Time::MAX {
+            outbox.send::<Self>(DmaTransfer, self.queued_dma_event);
+            self.queued_dma_event = Time::MAX;
+        }
+    }
 }
 
 impl Handler<N64Actors, CBusWrite> for PiActor {
     fn recv(&mut self, outbox: &mut PiOutbox, message: CBusWrite, time: Time, _limit: Time) -> SchedulerResult {
+        self.clear_outbox(outbox);
+
         let data = message.data;
         let n = (message.address >> 3) as usize & 1;
         match message.address & 0x3c {
@@ -69,15 +149,22 @@ impl Handler<N64Actors, CBusWrite> for PiActor {
                 todo!("PI_RD_LEN")
             }
             0x0c => { // PI_WR_LEN
-                todo!("PI_WR_LEN")
+                println!("PI write PI_WR_LEN = {:#010x}", data);
+                self.wr_len = data & 0x00ff_ffff;
+                self.dma_status = DmaStatus::Writing;
+                self.queued_dma_event = self.dma_event_time(time);
+                assert!(self.queued_dma_event != Time::MAX);
+                println!("  {} queued dma event at {}", time, self.queued_dma_event)
             }
             0x10 => { // PI_STATUS
                 println!("PI write PI_STATUS = {:#010x}", data);
                 if data & 0x1 != 0 {
-                    println!("  reset dma")
+                    println!("  reset dma");
+                    self.queued_dma_event = Time::MAX;
+                    self.dma_status = DmaStatus::Idle;
                 }
                 if data & 0x2 != 0 {
-                    println!("  clear interrupt")
+                    println!("  clear interrupt");
                 }
             }
             0x14 | 0x24 => { // PI_BSD_DOMn_LAT
@@ -109,6 +196,8 @@ impl Handler<N64Actors, CBusWrite> for PiActor {
 
 impl Handler<N64Actors, CBusRead> for PiActor {
     fn recv(&mut self, outbox: &mut PiOutbox, message: CBusRead, time: Time, _limit: Time) -> SchedulerResult {
+        self.clear_outbox(outbox);
+
         let n = (message.address >> 3) as usize & 1;
         let data = match message.address & 0x3c {
             0x00 => { // PI_DRAM_ADDR
@@ -128,10 +217,17 @@ impl Handler<N64Actors, CBusRead> for PiActor {
                 0x7f // N64brew: "Reading appears to always return `0x7F` (more research required)"
             }
             0x10 => { // PI_STATUS
-                todo!("PI_STATUS");
-                // let data = 0;
-                // println!("PI read PI_STATUS = {:#08x}", data);
-                // data
+                let mut data = 0;
+
+                match self.dma_status {
+                    DmaStatus::Idle => {}
+                    DmaStatus::Writing | DmaStatus::Reading => data |= 0x3, // IO busy, DMA busy
+                }
+
+                // TODO: Interrupts
+
+                //println!("PI read PI_STATUS = {:#08x}", data);
+                data
             }
             0x14 | 0x24 => { // PI_BSD_DOMn_LAT
                 println!("PI read PI_BSD_DOM{}_LAT = {:#010x}", n, self.domains[n].latency);
@@ -163,12 +259,14 @@ impl Handler<N64Actors, CBusRead> for PiActor {
 impl Handler<N64Actors, PiRead> for PiActor {
     #[inline(always)]
     fn recv(&mut self, outbox: &mut PiOutbox, message: PiRead, time: Time, _limit: Time) -> SchedulerResult {
+        assert!(self.dma_status == DmaStatus::Idle);
+
         if message.cart_addr & 0x3 != 0 {
             panic!("unaligned PI read {:#010x}", message.cart_addr)
         }
         let addr = message.cart_addr & 0xffff_fffc;
 
-        let domain;
+        let domain = self.domain(addr);
 
         let data;
 
@@ -183,7 +281,6 @@ impl Handler<N64Actors, PiRead> for PiActor {
                 unimplemented!("PI read {:#010x} (Cartridge SRAM/FlashRAM)", addr);
             }
             0x1000_0000..=0x17ff_ffff => { // Cartridge ROM (Domain 1)
-                domain = &self.domains[0];
                 data = self.read_word(addr - 0x1000_0000);
                 println!("PI read {:#010x} (ROM) = {:#010x}", addr, data);
             }
@@ -235,6 +332,131 @@ impl PiWrite {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum DmaStatus {
+    Idle,
+    Reading,
+    Writing,
+}
+
+struct DmaTransfer;
+
+impl PiActor {
+
+    fn do_write(&mut self, d_bus: &mut DBus) -> u64 {
+
+        let mut mask = !0u64;
+        let mut src_addr = self.cart_addr;
+
+        let domain = self.domain(src_addr);
+        let bytes = domain.clamped_bytes(src_addr, self.wr_len + 1);
+
+        let mut dram_addr = self.dram_addr;
+
+        //println!("PI write {:#010x} -> {:#010x} ({} bytes)", src_addr, dram_addr, bytes);
+
+        let misalignment = dram_addr & 0x7;
+        let aligned_bytes = if misalignment != 0 {
+            // First transfer is misaligned in dram and needs a mask
+            mask = !0u64 >> (misalignment * 8);
+            dram_addr -= misalignment;
+            src_addr -= misalignment;
+            bytes + misalignment
+        } else {
+            bytes
+        };
+
+        // The PI has a 128 bytes of buffer, enough to do a 16 transfer burst
+        let aligned_bytes = aligned_bytes.min(128);
+        let transfer_count = u64::from((aligned_bytes + 7) / 8);
+
+        let mut remaining_bytes = aligned_bytes;
+
+        while remaining_bytes >= 8 {
+            let data = self.read_dword(src_addr - 0x1000_0000);
+            if mask != !0u64 {
+                d_bus.write_qword_masked(dram_addr, data, mask);
+                mask = !0u64;
+            } else {
+                d_bus.write_qword(dram_addr, data);
+            }
+
+            dram_addr += 8;
+            src_addr += 8;
+            remaining_bytes -= 8;
+        }
+
+        if remaining_bytes != 0 {
+            let data = self.read_dword(src_addr - 0x1000_0000);
+            // Last transfer is less than 8 bytes and needs a mask
+            mask &= !0u64 << ((8 - remaining_bytes) * 8);
+
+            d_bus.write_qword_masked(dram_addr, data, mask);
+            dram_addr += remaining_bytes;
+            src_addr += remaining_bytes;
+        }
+
+        self.dram_addr = dram_addr;
+        self.cart_addr = src_addr;
+
+        if self.wr_len <= bytes {
+            // DMA finished
+            self.wr_len = 0;
+            self.dma_status = DmaStatus::Idle;
+        } else {
+            self.wr_len -= bytes;
+        }
+
+        transfer_count
+    }
+
+    fn do_dma(&mut self, outbox: &mut PiOutbox, d_bus: &mut DBus, time: Time) -> SchedulerResult {
+        let transfer_count = match self.dma_status {
+            DmaStatus::Writing => self.do_write(d_bus),
+            DmaStatus::Reading => todo!("DRAM -> PI transfer"),
+            DmaStatus::Idle => unreachable!(),
+        };
+
+        if self.dma_status != DmaStatus::Idle {
+            let next_time = self.dma_event_time(time.add(transfer_count));
+            outbox.send::<Self>(DmaTransfer, next_time);
+        }
+
+        SchedulerResult::Ok
+    }
+}
+
+impl Handler<N64Actors, DmaTransfer> for PiActor {
+    fn recv(&mut self, outbox: &mut PiOutbox, _: DmaTransfer, time: Time, _limit: Time) -> SchedulerResult {
+        match self.bus.take() {
+            Some(mut bus) => {
+                let result = self.do_dma(outbox, &mut bus.d_bus, time);
+                self.bus = Some(bus);
+                result
+            }
+            None => request_bus(outbox, time),
+        }
+    }
+}
+
+impl Handler<N64Actors, Box<BusPair>> for PiActor {
+    fn recv(&mut self, outbox: &mut PiOutbox, mut bus: Box<BusPair>, time: Time, _: Time) -> SchedulerResult
+    {
+        let result = self.do_dma(outbox, &mut bus.d_bus, time);
+        self.bus = Some(bus);
+
+        result
+    }
+}
+
+impl Handler<N64Actors, ReturnBus> for PiActor {
+    fn recv(&mut self, outbox: &mut PiOutbox, _: ReturnBus, time: Time, _: Time) -> SchedulerResult {
+        self.clear_outbox(outbox);
+
+        outbox.send::<BusActor>(self.bus.take().unwrap(), time)
+    }
+}
+
 #[derive(Debug, Default)]
 struct PiDomain {
     latency: u8,
@@ -252,5 +474,12 @@ impl PiDomain {
         let word_cycles = (self.pulse_width as u64 + 1) + (self.release as u64 + 1);
 
         page_cycles * pages + word_cycles * hwords
+    }
+
+    fn clamped_bytes(&self, addr: u32, bytes: u32) -> u32 {
+        let page_size = (self.page_size as u32 + 1) << 1;
+        let offset = addr % page_size;
+
+        (bytes + offset).min(page_size) - offset
     }
 }

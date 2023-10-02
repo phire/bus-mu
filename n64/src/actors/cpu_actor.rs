@@ -152,52 +152,51 @@ impl CpuActor {
     }
 
     fn start_d_bus(&mut self, outbox: &mut CpuOutbox, request: vr4300::BusRequest, time: Time, limit: Time) -> SchedulerResult {
-        use c_bus::RegBusResult::*;
         use vr4300::BusRequest::*;
 
         let d_bus = &mut self.bus.as_mut().unwrap().d_bus;
 
         match request {
             BusRead32(req_type, addr) => {
-                let (cycles, bytes) = d_bus.read_qwords(addr);
+                let (cycles, bytes) = d_bus.read_bytes(addr);
                 self.finish_read32(outbox, req_type, u32::from_le_bytes(bytes), time.add(cycles), limit)
             }
             BusRead64(_, addr) => {
-                let (cycles, bytes) = d_bus.read_qwords::<8>(addr);
+                let (cycles, bytes) = d_bus.read_bytes::<8>(addr);
                 self.finish_read64(outbox, as_words(bytes), time.add(cycles), limit)
             }
             BusRead128(_, addr) => {
-                let (cycles, bytes) = d_bus.read_qwords::<16>(addr);
+                let (cycles, bytes) = d_bus.read_bytes::<16>(addr);
                 self.finish_read128(outbox, &as_words(bytes), time.add(cycles), limit)
             }
             BusRead256(_, addr) => {
-                let (cycles, bytes) = d_bus.read_qwords::<32>(addr);
+                let (cycles, bytes) = d_bus.read_bytes::<32>(addr);
                 self.finish_read256(outbox, &as_words(bytes), time.add(cycles), limit)
             }
             // TODO: These should use masks
             BusWrite8(_, addr, data) => {
-                let cycles = d_bus.write_qwords(addr, [data as u8]);
+                let cycles = d_bus.write_bytes(addr, [data as u8]);
                 self.finish_write32(outbox, time.add(cycles), limit)
             }
             BusWrite16(_, addr, data) => {
-                let cycles = d_bus.write_qwords(addr, (data as u16).to_le_bytes());
+                let cycles = d_bus.write_bytes(addr, (data as u16).to_le_bytes());
                 self.finish_write32(outbox, time.add(cycles), limit)
             }
             BusWrite24(_, addr, data) => {
                 let data = data.to_le_bytes()[0..3].try_into().unwrap();
-                let cycles = d_bus.write_qwords::<3>(addr, data);
+                let cycles = d_bus.write_bytes::<3>(addr, data);
                 self.finish_write32(outbox, time.add(cycles), limit)
             }
             BusWrite32(_, addr, data) => {
-                let cycles = d_bus.write_qwords(addr, data.to_le_bytes());
+                let cycles = d_bus.write_bytes(addr, data.to_le_bytes());
                 self.finish_write32(outbox, time.add(cycles), limit)
             }
             BusWrite64(_, addr, data) => {
-                let cycles = d_bus.write_qwords(addr, data.to_le_bytes());
+                let cycles = d_bus.write_bytes(addr, data.to_le_bytes());
                 self.finish_write64(outbox, time.add(cycles), limit)
             }
             BusWrite128(_, addr, data) => {
-                let cycles = d_bus.write_qwords::<16>(addr, as_bytes(data));
+                let cycles = d_bus.write_bytes::<16>(addr, as_bytes(data));
                 self.finish_write128(outbox, time.add(cycles), limit)
             }
         }
@@ -436,7 +435,7 @@ impl Handler<N64Actors, Box<BusPair>> for CpuActor {
         self.recursion = 0;
         self.bus = Some(bus);
         if request.address() < 0x0400_0000 {
-            todo!("RAMBUS")
+            self.start_d_bus(outbox, request, time, limit)
         } else {
             self.start_c_bus(outbox, request, time, limit)
         }

@@ -33,7 +33,7 @@ impl DBus {
         (cycles, data)
     }
 
-    pub fn read_qwords<const COUNT: usize>(&mut self, addr: u32) -> (u64, [u8; COUNT]) {
+    pub fn read_bytes<const COUNT: usize>(&mut self, addr: u32) -> (u64, [u8; COUNT]) {
         let (cycles, mem) = self.get_slice::<COUNT>(addr);
 
         let data = mem[..COUNT].try_into().unwrap();
@@ -41,10 +41,31 @@ impl DBus {
         (cycles, data)
     }
 
-    pub fn write_qwords<const COUNT: usize>(&mut self, addr: u32, data: [u8; COUNT]) -> u64 {
+    pub fn write_bytes<const COUNT: usize>(&mut self, addr: u32, data: [u8; COUNT]) -> u64 {
         let (cycles, mem) = self.get_slice::<COUNT>(addr);
 
         mem.copy_from_slice(&data);
+
+        cycles
+    }
+
+    pub fn write_qword_masked(&mut self, addr: u32, data: u64, mask: u64) -> u64 {
+        assert!(addr & 0x7 == 0, "unaligned qword write");
+
+        let (cycles, mem) = self.get_slice::<8>(addr);
+
+        let orig = u64::from_le_bytes(mem.try_into().unwrap());
+        let modified = (orig & !mask | data & mask).to_le_bytes();
+        mem.copy_from_slice(&modified);
+
+        cycles
+    }
+
+    pub fn write_qword(&mut self, addr: u32, data: u64) -> u64 {
+        assert!(addr & 0x7 == 0, "unaligned qword write");
+
+        let (cycles, mem) = self.get_slice::<8>(addr);
+        mem.copy_from_slice(&data.to_le_bytes());
 
         cycles
     }

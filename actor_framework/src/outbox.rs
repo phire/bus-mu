@@ -7,7 +7,10 @@ where
 {
     type Sender: Actor<ActorNames>;
     fn time(&self) -> Time;
-    //fn as_proxy<'a>(&'a mut self) -> &'a mut MessagePacketProxy<ActorNames>;
+    fn try_cancel<Message>(&mut self) -> Option<(Time, Message)>
+    where
+        Self: OutboxSend<ActorNames, Message>,
+        Message: 'static;
     fn stash(&mut self, other: &mut Self);
     fn restore(&mut self, other: &mut Self);
 }
@@ -92,9 +95,27 @@ macro_rules! make_outbox {
         impl actor_framework::Outbox<$name_type> for $name
         {
             type Sender = $sender;
+
+            #[inline(always)]
             fn time(&self) -> actor_framework::Time {
                 unsafe { self.none.time }
             }
+
+            #[inline(always)]
+            fn try_cancel<Message>(&mut self) -> Option<(actor_framework::Time, Message)>
+                where
+                    Self: actor_framework::OutboxSend<$name_type, Message>,
+                    Message: 'static,
+            {
+                let msg_type = unsafe { self.none.msg_type() };
+                if msg_type == std::any::TypeId::of::<Message>() {
+                    use actor_framework::OutboxSend;
+                    Some(self.cancel())
+                } else {
+                    None
+                }
+            }
+
             fn stash(&mut self, other: &mut Self) {
                 assert!(other.is_empty());
                 *other = core::mem::take(self);
@@ -103,9 +124,6 @@ macro_rules! make_outbox {
                 assert!(self.is_empty());
                 *self = core::mem::take(other);
             }
-            // fn as_proxy<'a>(&'a mut self) -> &'a mut actor_framework::MessagePacketProxy<ActorNames> {
-            //     unsafe { core::mem::transmute(&mut self.none) }
-            // }
         }
 
         impl core::default::Default for $name {
