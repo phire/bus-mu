@@ -147,11 +147,12 @@ impl ThreadAdapter
 
             match result {
                 Ok(_) => {
-                    tx_instance.send(None).map_err(|_| anyhow::anyhow!("Channel closed"))?;
-                    return Ok(());
+                    tx_instance.send(Some(instance)).map_err(|_| anyhow::anyhow!("Channel closed"))?;
                 },
                 Err(e) => {
                     eprintln!("Instance returned error: {:?}", e);
+                    tx_instance.send(None).map_err(|_| anyhow::anyhow!("Channel closed"))?;
+                    return Err(e);
                 }
             }
         }
