@@ -57,9 +57,14 @@ impl eframe::App for BusMuApp {
    }
 }
 
-pub fn run(cores: Vec<&'static dyn common::EmulationCore>) -> Result<(), anyhow::Error> {
-    // TODO: support dynamically selecting between cores
-    let core = cores.into_iter().next().unwrap();
+pub fn run(core: Option<&'static dyn EmulationCore>, cores: Vec<&'static dyn EmulationCore>) -> Result<(), anyhow::Error> {
+    let core = match core {
+        Some(core) => core,
+        None => {
+            // TODO: support dynamically selecting between cores
+            cores.into_iter().next().unwrap()
+        }
+    };
 
     let native_options = eframe::NativeOptions::default();
     let result = eframe::run_native(

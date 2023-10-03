@@ -11,3 +11,4 @@ ui = ["egui"]
 [dependencies]
 anyhow = { workspace = true }
 egui = { workspace = true, optional = true }
+clap = { workspace = true }

@@ -6,12 +6,16 @@ pub mod pif;
 mod c_bus;
 mod d_bus;
 
-pub use actors::N64Actors;
+use std::path::PathBuf;
 
-pub struct CoreN64 { }
+pub use actors::N64Actors;
+use clap::{Parser, FromArgMatches, Args};
+
+pub struct CoreN64;
 
 impl common::EmulationCore for CoreN64 {
     fn name(&self) -> &'static str { "Nintendo 64" }
+    fn short_name(&self) -> &'static str { "n64" }
 
     fn new(&self) -> Result<Box<dyn common::Instance + Send>, anyhow::Error> {
         Ok(Box::new(actor_framework::Instance::<N64Actors>::new()))
@@ -28,4 +32,27 @@ impl common::EmulationCore for CoreN64 {
     }
 }
 
-pub static CORE_N64 : CoreN64 = CoreN64 { };
+impl<GlobalOpts> common::EmulationCoreCli<GlobalOpts> for CoreN64
+where
+    GlobalOpts: FromArgMatches + Args,
+{
+    fn parse_args(&self) -> GlobalOpts
+    {
+        Cli::<GlobalOpts>::parse().global_opts
+    }
+}
+
+#[derive(Debug, Parser)]
+struct Cli<GlobalOpts>
+where
+    GlobalOpts: FromArgMatches + Args
+{
+    rom: Option<PathBuf>,
+
+    #[arg(long, short)]
+    #[clap(next_help_heading = "N64 Core Options")]
+    foo: bool,
+
+    #[clap(flatten)]
+    global_opts: GlobalOpts,
+}

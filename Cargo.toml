@@ -30,12 +30,14 @@ common = { path = "common" }
 n64 = { path = "n64" }
 ui = { path = "ui", optional = true }
 anyhow = { workspace = true }
+clap = { workspace = true }
 
 [workspace.dependencies]
 modular-bitfield = "0.11.2"
 eframe = "0.22"
 egui = "0.22"
 anyhow = "1.0"
+clap = { version = "4.4", features = ["derive"] }
 
 [profile.release]
 #lto = true

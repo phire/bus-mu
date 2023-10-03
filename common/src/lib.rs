@@ -1,8 +1,15 @@
-use std::sync::mpsc::{self, SyncSender, Receiver};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 
-pub trait EmulationCore {
+pub mod cli;
+
+pub trait EmulationCore: Sync + Send {
     /// The name of the core
     fn name(&self) -> &'static str;
+
+    /// Short name of the core (ideally 2-3 chars)
+    fn short_name(&self) -> &'static str;
+
+    // Create an instance of the core
     fn new(&self) -> Result<Box<dyn Instance + Send>, anyhow::Error>;
 
     /// Create a single-threaded instance of the core.
@@ -34,6 +41,16 @@ pub trait EmulationCore {
     }
 }
 
+pub trait EmulationCoreCli<GlobalOpts>
+where
+    GlobalOpts: clap::FromArgMatches + clap::Args,
+{
+    //type Parser : clap::Parser;
+
+    fn parse_args(&self) -> GlobalOpts;
+
+}
+
 /// Messages sent from the core instance to the UI thread
 pub enum UpdateMessage {
     /// Signals to the UI thread that the core has a new frame of video ready to be shown
@@ -55,9 +72,10 @@ pub enum ControlMessage {
 
 /// Synchronous instance of an emulator core
 pub trait Instance {
-    fn run(&mut self,
+    fn run(
+        &mut self,
         control_rx: &mpsc::Receiver<ControlMessage>,
-        update: mpsc::SyncSender<UpdateMessage>
+        update: mpsc::SyncSender<UpdateMessage>,
     ) -> Result<(), anyhow::Error>;
 
     fn as_any(&mut self) -> &mut dyn std::any::Any;
@@ -105,22 +123,18 @@ pub struct ThreadAdapter {
     join: Option<std::thread::JoinHandle<Result<(), anyhow::Error>>>,
 }
 
-impl ThreadAdapter
-{
+impl ThreadAdapter {
     pub fn new(instance: Box<dyn Instance + Send>) -> Result<Self, anyhow::Error> {
         // Create all our channels
         let (tx_control, rx_control) = mpsc::sync_channel::<ControlMessage>(1);
         let (tx_update, rx_update) = mpsc::sync_channel::<UpdateMessage>(1);
         let (tx_instance, rx_instance) = mpsc::sync_channel::<Box<dyn Instance + Send>>(1);
-        let (tx_instance_return, rx_instance_return) = mpsc::sync_channel::<Option<Box<dyn Instance + Send>>>(1);
+        let (tx_instance_return, rx_instance_return) =
+            mpsc::sync_channel::<Option<Box<dyn Instance + Send>>>(1);
 
         // Spawn the thread now.
         let join = std::thread::spawn(move || {
-                Self::thread_main(
-                    rx_instance,
-                    tx_instance_return,
-                    rx_control,
-                    tx_update)
+            Self::thread_main(rx_instance, tx_instance_return, rx_control, tx_update)
         });
 
         Ok(Self {
@@ -137,7 +151,7 @@ impl ThreadAdapter
         rx_instance: Receiver<Box<dyn Instance + Send>>,
         tx_instance: SyncSender<Option<Box<dyn Instance + Send>>>,
         rx_control: Receiver<ControlMessage>,
-        tx_update: SyncSender<UpdateMessage>
+        tx_update: SyncSender<UpdateMessage>,
     ) -> Result<(), anyhow::Error> {
         // We don't want to pay the overhead of starting a thread every time we unpause.
         // Instead, we transfer the instance to and from the thread main loop as needed
@@ -147,11 +161,15 @@ impl ThreadAdapter
 
             match result {
                 Ok(_) => {
-                    tx_instance.send(Some(instance)).map_err(|_| anyhow::anyhow!("Channel closed"))?;
-                },
+                    tx_instance
+                        .send(Some(instance))
+                        .map_err(|_| anyhow::anyhow!("Channel closed"))?;
+                }
                 Err(e) => {
                     eprintln!("Instance returned error: {:?}", e);
-                    tx_instance.send(None).map_err(|_| anyhow::anyhow!("Channel closed"))?;
+                    tx_instance
+                        .send(None)
+                        .map_err(|_| anyhow::anyhow!("Channel closed"))?;
                     return Err(e);
                 }
             }
@@ -159,12 +177,13 @@ impl ThreadAdapter
     }
 }
 
-impl ThreadedInstance for ThreadAdapter
-{
+impl ThreadedInstance for ThreadAdapter {
     fn start(&mut self) -> Result<(), anyhow::Error> {
         match self.instance.take() {
-            Some(instance) =>
-                self.tx_instance.send(instance).map_err(|_| anyhow::anyhow!("Channel closed")),
+            Some(instance) => self
+                .tx_instance
+                .send(instance)
+                .map_err(|_| anyhow::anyhow!("Channel closed")),
             None => anyhow::bail!("invalid instance state"),
         }
     }
@@ -174,23 +193,25 @@ impl ThreadedInstance for ThreadAdapter
         return match self.instance {
             Some(_) => Ok(()),
             None => {
-                self.join.take().expect("invalid instance state").join().unwrap()?;
+                self.join
+                    .take()
+                    .expect("invalid instance state")
+                    .join()
+                    .unwrap()?;
                 Err(anyhow::anyhow!("Instance paniced"))
-            },
-        }
+            }
+        };
     }
     #[cfg(feature = "ui")]
-    fn paused_ui(&mut self, core: &dyn EmulationCore, ui: &mut egui::Ui)
-    {
+    fn paused_ui(&mut self, core: &dyn EmulationCore, ui: &mut egui::Ui) {
         match self.instance {
             Some(ref mut instance) => core.paused_ui(instance.as_mut(), ui),
-            None => panic!("Instance running or paniced")
+            None => panic!("Instance running or paniced"),
         }
     }
 
     #[cfg(feature = "ui")]
-    fn ui(&self, core: &dyn EmulationCore, ui: &mut egui::Ui)
-    {
+    fn ui(&self, core: &dyn EmulationCore, ui: &mut egui::Ui) {
         assert!(self.instance.is_none());
         // Sync with instance thread
         if self.tx_control.send(ControlMessage::UiSync).is_ok() {
@@ -198,7 +219,7 @@ impl ThreadedInstance for ThreadAdapter
                 match self.rx_update.recv() {
                     Ok(UpdateMessage::UiSynced) => break,
                     Ok(_) => continue, // TODO: We probably should be processing these
-                    Err(_) => return, // Channel closed
+                    Err(_) => return,  // Channel closed
                 }
             }
         }
