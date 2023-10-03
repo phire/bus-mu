@@ -5,7 +5,7 @@
 use actor_framework::{Actor, Time, Handler,  OutboxSend, SchedulerResult, ActorCreate, Outbox};
 use super::{N64Actors, pi_actor, bus_actor::{BusPair, ReturnBus, request_bus}};
 
-use vr4300;
+use vr4300::{self, RequestType};
 
 use crate::{actors::bus_actor::{BusActor, BusRequest}, c_bus::{self, CBus}, d_bus::DBus};
 
@@ -163,7 +163,7 @@ impl CpuActor {
             }
             BusRead64(_, addr) => {
                 let (cycles, bytes) = d_bus.read_bytes::<8>(addr);
-                self.finish_read64(outbox, as_words(bytes), time.add(cycles), limit)
+                self.finish_read64(outbox, &as_words(bytes), time.add(cycles), limit)
             }
             BusRead128(_, addr) => {
                 let (cycles, bytes) = d_bus.read_bytes::<16>(addr);
@@ -223,19 +223,21 @@ impl CpuActor {
     /// The generic memory finish function
     /// Don't call this directly, call one of the specialized version instead
     #[inline(always)]
-    fn finish_mem_unspecialised(&mut self, outbox: &mut CpuOutbox, req_type: vr4300::RequestType, mem_finished: MemFinished, time: Time, limit: Time) -> SchedulerResult {
+    fn finish_mem_unspecialised(&mut self, outbox: &mut CpuOutbox, req_type: vr4300::RequestType, data: &[u32], time: Time, limit: Time) -> SchedulerResult {
         //println!("CPU: Finishing {:} = {:x?} at {:}", request, mem_finished, time);
 
         //assert!((u64::from(time) - u64::from(self.committed_time)) >= 1, "mem finished too fast");
 
-        let finish_time = match &mem_finished {
-            MemFinished::Read(message) => {
-                // It takes length cycles to receive the data across the SysAD bus
-                time.add(message.length())
-            }
-            MemFinished::Write(_) => {
-                time // No data to transfer back
-            }
+        let write = match req_type {
+            RequestType::UncachedWrite | RequestType::DCacheWriteback => true,
+            _ => false,
+        };
+
+        let finish_time = if write {
+            time // No data to transfer back
+        } else {
+            // It takes length cycles to receive the data across the SysAD bus
+            time.add(data.len() as u64)
         };
 
         self.bus_free = finish_time;
@@ -245,17 +247,14 @@ impl CpuActor {
         //        Except in caches where this request wasn't triggered by an interlock
         let catchup_result = self.advance(outbox, CpuRun {  }, finish_time);
 
-        match &mem_finished {
-            MemFinished::Read(message) => {
-                let new_req = self.cpu_core.finish_read(req_type, &message.data, message.length());
+        if write {
+            self.cpu_core.finish_write(req_type, data.len() as u64);
+        } else {
+            let new_req = self.cpu_core.finish_read(req_type, data);
 
-                if let Some(new_req) = new_req {
-                    assert!(self.outstanding_mem_request.is_none());
-                    self.start_request(outbox, new_req, limit);
-                }
-            }
-            MemFinished::Write(message) => {
-                self.cpu_core.finish_write(req_type, message.length());
+            if let Some(new_req) = new_req {
+                assert!(self.outstanding_mem_request.is_none());
+                self.start_request(outbox, new_req, limit);
             }
         }
 
@@ -273,68 +272,45 @@ impl CpuActor {
         return self.advance(outbox, cpurun, limit);
     }
 
-    #[inline(always)]
-    #[allow(unused)]
-    fn debug_check_finish_mem(req_type: vr4300::RequestType, mem_finished: MemFinished) {
-        use vr4300::RequestType::*;
-        match mem_finished {
-            MemFinished::Read(ReadFinished{ length, data: _}) => match length {
-                CpuLength::Word =>
-                    debug_assert!(req_type == UncachedDataRead || req_type == UncachedInstructionRead),
-                CpuLength::Dword => debug_assert!(req_type == UncachedDataRead),
-                CpuLength::Qword => debug_assert!(req_type == DCacheFill),
-                CpuLength::Octword => debug_assert!(req_type == ICacheFill),
-            }
-            MemFinished::Write(WriteFinished { length }) => {
-                match length {
-                    CpuLength::Word => debug_assert!(req_type == UncachedWrite),
-                    CpuLength::Dword => debug_assert!(req_type == UncachedWrite),
-                    CpuLength::Qword => debug_assert!(req_type == DCacheWriteback),
-                    CpuLength::Octword => debug_assert!(false),
-                }
-            }
-        }
-    }
-
     #[inline(never)]
     fn finish_read32(&mut self, outbox: &mut CpuOutbox, req_type: vr4300::RequestType, data: u32, time: Time, limit: Time) -> SchedulerResult {
         match req_type {
             vr4300::RequestType::UncachedDataRead | vr4300::RequestType::UncachedInstructionRead => {
-                self.finish_mem_unspecialised(outbox, req_type, MemFinished::Read(ReadFinished::word(data)), time, limit)
+                let data = [data];
+                self.finish_mem_unspecialised(outbox, req_type, &data, time, limit)
             }
             _ => { unreachable!() }
         }
     }
 
     #[inline(never)]
-    fn finish_read64(&mut self, outbox: &mut CpuOutbox, data: [u32; 2], time: Time, limit: Time) -> SchedulerResult {
-        let finished = ReadFinished { length: CpuLength::Dword, data: [data[0], data[1], 0, 0, 0, 0, 0, 0] };
-        self.finish_mem_unspecialised(outbox, vr4300::RequestType::UncachedDataRead, MemFinished::Read(finished), time, limit)
+    fn finish_read64(&mut self, outbox: &mut CpuOutbox, data: &[u32; 2], time: Time, limit: Time) -> SchedulerResult {
+        self.finish_mem_unspecialised(outbox, vr4300::RequestType::UncachedDataRead, data, time, limit)
     }
 
     #[inline(never)]
     fn finish_read128(&mut self, outbox: &mut CpuOutbox, data: &[u32; 4], time: Time, limit: Time) -> SchedulerResult {
-        self.finish_mem_unspecialised(outbox, vr4300::RequestType::DCacheFill, MemFinished::Read(ReadFinished::qword(*data)), time, limit)
+        self.finish_mem_unspecialised(outbox, vr4300::RequestType::DCacheFill, data, time, limit)
     }
 
     #[inline(never)]
     fn finish_read256(&mut self, outbox: &mut CpuOutbox, data: &[u32; 8], time: Time, limit: Time) -> SchedulerResult {
-        self.finish_mem_unspecialised(outbox, vr4300::RequestType::ICacheFill, MemFinished::Read(ReadFinished::octword(*data)), time, limit)
+        self.finish_mem_unspecialised(outbox, vr4300::RequestType::ICacheFill, data, time, limit)
     }
 
     #[inline(never)]
     fn finish_write32(&mut self, outbox: &mut CpuOutbox, time: Time, limit: Time) -> SchedulerResult {
-        self.finish_mem_unspecialised(outbox, vr4300::RequestType::UncachedWrite, MemFinished::Write(WriteFinished::word()), time, limit)
+        self.finish_mem_unspecialised(outbox, vr4300::RequestType::UncachedWrite, &[0; 1], time, limit)
     }
 
     #[inline(never)]
     fn finish_write64(&mut self, outbox: &mut CpuOutbox, time: Time, limit: Time) -> SchedulerResult {
-        self.finish_mem_unspecialised(outbox, vr4300::RequestType::UncachedWrite, MemFinished::Write(WriteFinished::dword()), time, limit)
+        self.finish_mem_unspecialised(outbox, vr4300::RequestType::UncachedWrite, &[0; 2], time, limit)
     }
 
     #[inline(never)]
     fn finish_write128(&mut self, outbox: &mut CpuOutbox, time: Time, limit: Time) -> SchedulerResult {
-        self.finish_mem_unspecialised(outbox, vr4300::RequestType::DCacheWriteback, MemFinished::Write(WriteFinished::qword()), time, limit)
+        self.finish_mem_unspecialised(outbox, vr4300::RequestType::DCacheWriteback, &[0; 4], time, limit)
     }
 
 }
@@ -369,9 +345,9 @@ impl ActorCreate<N64Actors> for CpuActor {
     }
 }
 
-impl Handler<N64Actors, ReadFinished> for CpuActor {
+impl Handler<N64Actors, c_bus::ReadFinished> for CpuActor {
     #[inline(always)]
-    fn recv(&mut self, outbox: &mut CpuOutbox, message: ReadFinished, time: Time, limit: Time) -> SchedulerResult {
+    fn recv(&mut self, outbox: &mut CpuOutbox, message: c_bus::ReadFinished, time: Time, limit: Time) -> SchedulerResult {
         self.recursion = 0; // Reset recursion
 
         // PERF: Should we put outstanding_mem_request inside the ReadFinshed message?
@@ -379,36 +355,17 @@ impl Handler<N64Actors, ReadFinished> for CpuActor {
         //Self::debug_check_finish_mem(request.request_type(), MemFinished::Read(message.clone()));
 
         // PERF: We should do separate handlers for each length, save the dispatch
-        match message.length {
-            CpuLength::Word => {
-                let req_type = self.req_type.take().unwrap();
-                self.finish_read32(outbox, req_type, message.data[0], time, limit)
-            }
-            CpuLength::Dword => {
-                self.finish_read64(outbox, message.data[0..1].try_into().unwrap(), time, limit)
-            }
-            CpuLength::Qword => {
-                self.finish_read128(outbox, message.data[0..4].try_into().unwrap(), time, limit)
-            }
-            CpuLength::Octword => {
-                self.finish_read256(outbox, &message.data, time, limit)
-            }
-        }
+        let req_type = self.req_type.take().unwrap();
+        self.finish_read32(outbox, req_type, message.data, time, limit)
     }
 }
 
-impl Handler<N64Actors, WriteFinished> for CpuActor {
+impl Handler<N64Actors, c_bus::WriteFinished> for CpuActor {
     #[inline(always)]
-    fn recv(&mut self, outbox: &mut CpuOutbox, message: WriteFinished, time: Time, limit: Time) -> SchedulerResult {
+    fn recv(&mut self, outbox: &mut CpuOutbox, _: c_bus::WriteFinished, time: Time, limit: Time) -> SchedulerResult {
         self.recursion = 0; // Reset recursion
 
-        // PERF: We should do separate handlers for each length, save the dispatch
-        match message.length {
-            CpuLength::Word => self.finish_write32(outbox, time, limit),
-            CpuLength::Dword => self.finish_write64(outbox, time, limit),
-            CpuLength::Qword => self.finish_write128(outbox, time, limit),
-            CpuLength::Octword => unreachable!()
-        }
+        self.finish_write32(outbox, time, limit)
     }
 }
 
@@ -440,70 +397,6 @@ impl Handler<N64Actors, Box<BusPair>> for CpuActor {
             self.start_c_bus(outbox, request, time, limit)
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum CpuLength {
-    Word = 1,
-    Dword = 2,
-    Qword = 4,
-    Octword = 8,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ReadFinished {
-    length: CpuLength,
-    pub data: [u32; 8]
-}
-
-impl ReadFinished {
-    pub fn word(data: u32) -> Self {
-        Self {
-            length: CpuLength::Word,
-            data: [data, 0, 0, 0, 0, 0, 0, 0]
-        }
-    }
-    pub fn dword(data: u64) -> Self {
-        Self {
-            length: CpuLength::Dword,
-            data: [(data >> 32) as u32, data as u32, 0, 0, 0, 0, 0, 0]
-        }
-    }
-    pub fn qword(data: [u32; 4]) -> Self {
-        Self {
-            length: CpuLength::Qword,
-            data: [data[0], data[1], data[2], data[3], 0, 0, 0, 0]
-        }
-    }
-    pub fn octword(data: [u32; 8]) -> Self {
-        Self {
-            length: CpuLength::Octword,
-            data
-        }
-    }
-
-    pub fn length(&self) -> u64 {
-        self.length as u64
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct WriteFinished {
-    length: CpuLength
-}
-
-#[derive(Debug)]
-enum MemFinished {
-    Read(ReadFinished),
-    Write(WriteFinished)
-}
-
-impl WriteFinished {
-    pub fn word() -> Self { Self { length: CpuLength::Word }}
-    pub fn dword() -> Self { Self { length: CpuLength::Dword } }
-    pub fn qword() -> Self { Self { length: CpuLength::Qword } }
-    pub fn octword() -> Self { Self { length: CpuLength::Octword } }
-    pub fn length(&self) -> u64 { self.length as u64 }
 }
 
 impl Handler<N64Actors, c_bus::Resource> for CpuActor {

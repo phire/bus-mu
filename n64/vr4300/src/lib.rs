@@ -120,7 +120,7 @@ impl Core {
     }
 
     #[inline(always)]
-    pub fn finish_read(&mut self, request_type: RequestType, data: &[u32; 8], length: u64) -> Option<BusRequest> {
+    pub fn finish_read(&mut self, request_type: RequestType, data: &[u32]) -> Option<BusRequest> {
         let mut mem_req = None;
         let response = match request_type {
             RequestType::UncachedInstructionRead => {
@@ -136,22 +136,22 @@ impl Core {
                     BusRequest::BusWrite128(RequestType::DCacheWriteback, addr, data)
                 });
 
-                MemoryResponce::DCacheFill(data[0..4].try_into().unwrap())
+                MemoryResponce::DCacheFill(data.try_into().unwrap())
             }
             RequestType::UncachedDataRead => {
-                match length {
+                match data.len() {
                     1 => {
                         // Sign-extend
                         MemoryResponce::UncachedDataRead(data[0] as i32 as u64)
                     }
                     2 => {
-                        MemoryResponce::UncachedDataRead((data[0] as u64) << 16 | (data[1] as u64))
+                        MemoryResponce::UncachedDataRead((data[0] as u64) << 32 | (data[1] as u64))
                     }
                     _ => unreachable!(),
                 }
             }
             RequestType::ICacheFill => {
-                MemoryResponce::ICacheFill(*data)
+                MemoryResponce::ICacheFill(data.try_into().unwrap())
             }
             _ => unreachable!(),
         };
@@ -252,6 +252,36 @@ impl BusRequest {
             BusRequest::BusWrite32(request_type, _, _) => { *request_type }
             BusRequest::BusWrite64(request_type, _, _) => { *request_type }
             BusRequest::BusWrite128(request_type, _, _) => { *request_type }
+        }
+    }
+
+    pub fn request_bytes(&self) -> u64 {
+        match self {
+            BusRequest::BusRead32(_, _) => { 4 }
+            BusRequest::BusRead64(_, _) => { 8 }
+            BusRequest::BusRead128(_, _) => { 16 }
+            BusRequest::BusRead256(_, _) => { 32 }
+            BusRequest::BusWrite8(_, _, _) => { 1 }
+            BusRequest::BusWrite16(_, _, _) => { 2 }
+            BusRequest::BusWrite24(_, _, _) => { 3 }
+            BusRequest::BusWrite32(_, _, _) => { 4 }
+            BusRequest::BusWrite64(_, _, _) => { 8 }
+            BusRequest::BusWrite128(_, _, _) => { 16 }
+        }
+    }
+
+    pub fn read(&self) -> bool {
+        match self {
+            BusRequest::BusRead32(_, _) => { true }
+            BusRequest::BusRead64(_, _) => { true }
+            BusRequest::BusRead128(_, _) => { true }
+            BusRequest::BusRead256(_, _) => { true }
+            BusRequest::BusWrite8(_, _, _) => { false }
+            BusRequest::BusWrite16(_, _, _) => { false }
+            BusRequest::BusWrite24(_, _, _) => { false }
+            BusRequest::BusWrite32(_, _, _) => { false }
+            BusRequest::BusWrite64(_, _, _) => { false }
+            BusRequest::BusWrite128(_, _, _) => { false }
         }
     }
 }

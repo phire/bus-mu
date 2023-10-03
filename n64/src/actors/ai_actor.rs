@@ -1,9 +1,9 @@
 
 
 use actor_framework::*;
-use crate::c_bus::{CBusWrite, CBusRead};
+use crate::c_bus::{CBusWrite, CBusRead, ReadFinished, WriteFinished};
 
-use super::{N64Actors, cpu_actor::{ReadFinished, CpuActor, WriteFinished}};
+use super::{N64Actors, cpu_actor::CpuActor};
 
 pub struct AiActor {
     dram_addr: u32,
@@ -62,7 +62,7 @@ impl Handler<N64Actors, CBusWrite> for AiActor {
             }
             _ => unreachable!()
         }
-        outbox.send::<CpuActor>(WriteFinished::word(), time.add(4))
+        outbox.send::<CpuActor>(WriteFinished {}, time.add(4))
     }
 }
 
@@ -100,6 +100,6 @@ impl Handler<N64Actors, CBusRead> for AiActor {
             }
             _ => unreachable!()
         };
-        outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4))
+        outbox.send::<CpuActor>(ReadFinished { data }, time.add(4))
     }
 }

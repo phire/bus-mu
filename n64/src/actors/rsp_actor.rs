@@ -1,7 +1,7 @@
 use actor_framework::*;
-use crate::c_bus::{CBusRead, CBusWrite, self};
+use crate::c_bus::{CBusRead, CBusWrite, self, WriteFinished, ReadFinished};
 
-use super::{N64Actors, cpu_actor::{ReadFinished, CpuActor, WriteFinished}};
+use super::{N64Actors, cpu_actor::CpuActor};
 
 pub struct RspActor {
     halted: bool,
@@ -11,8 +11,8 @@ pub struct RspActor {
 
 make_outbox!(
     RspOutbox<N64Actors, RspActor> {
-        cpu: ReadFinished,
-        cpu_w: WriteFinished,
+        finish_read: ReadFinished,
+        finish_write: WriteFinished,
         send_mem: c_bus::Resource,
         request_mem: c_bus::ResourceReturnRequest,
     }
@@ -68,7 +68,7 @@ impl Handler<N64Actors, CBusRead> for RspActor {
             }
             _ => unimplemented!()
         };
-        outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
+        outbox.send::<CpuActor>(ReadFinished {data}, time.add(4));
         SchedulerResult::Ok
     }
 }
@@ -147,7 +147,7 @@ impl Handler<N64Actors, CBusWrite> for RspActor {
             }
             _ => unimplemented!()
         };
-        outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
+        outbox.send::<CpuActor>(WriteFinished {}, time.add(4));
         SchedulerResult::Ok
     }
 }

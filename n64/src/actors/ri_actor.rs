@@ -1,7 +1,7 @@
 use actor_framework::*;
-use crate::c_bus::{CBusWrite, CBusRead};
+use crate::c_bus::{CBusWrite, CBusRead, ReadFinished, WriteFinished};
 
-use super::{N64Actors, cpu_actor::{ReadFinished, CpuActor, WriteFinished}};
+use super::{N64Actors, cpu_actor::CpuActor};
 
 /// RI or Ram Interface is the memory controller for the RCP.
 ///
@@ -15,8 +15,8 @@ pub struct RiActor {
 
 make_outbox!(
     RiOutbox<N64Actors, RiActor> {
-        cpu: ReadFinished,
-        cpu_w: WriteFinished,
+        finish_read: ReadFinished,
+        finish_write: WriteFinished,
     }
 );
 
@@ -71,7 +71,7 @@ impl Handler<N64Actors, CBusWrite> for RiActor {
             }
             _ => unreachable!()
         }
-        outbox.send::<CpuActor>(WriteFinished::word(), time.add(4))
+        outbox.send::<CpuActor>(WriteFinished {}, time.add(4))
     }
 }
 
@@ -115,7 +115,7 @@ impl Handler<N64Actors, CBusRead> for RiActor {
             }
             _ => unreachable!()
         };
-        outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
+        outbox.send::<CpuActor>(ReadFinished { data }, time.add(4));
         SchedulerResult::Ok
     }
 }

@@ -2,11 +2,11 @@ use std::any::TypeId;
 
 use actor_framework::{Actor, Handler, OutboxSend, SchedulerResult, Time, TimeQueue};
 
-use crate::c_bus::{CBusRead, CBusWrite};
+use crate::c_bus::{CBusRead, CBusWrite, ReadFinished, WriteFinished};
 
 use super::{
     bus_actor::{request_bus, BusActor, BusPair, BusRequest, ReturnBus},
-    cpu_actor::{CpuActor, ReadFinished, WriteFinished},
+    cpu_actor::CpuActor,
     pif_actor::PifActor,
     N64Actors,
 };
@@ -44,8 +44,8 @@ actor_framework::make_outbox!(
         bus: BusRequest,
         return_bus: Box<BusPair>,
         si_packet: SiPacket,
-        cpu: ReadFinished,
-        cpu_write: WriteFinished,
+        finish_read: ReadFinished,
+        finish_write: WriteFinished,
     }
 );
 
@@ -169,7 +169,7 @@ impl Handler<N64Actors, CBusRead> for SiActor {
                     self.queue.push(time, QueuedMessage::SiPacket(packet));
                 }
 
-                outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
+                outbox.send::<CpuActor>(ReadFinished {data}, time.add(4));
             }
             0x1fc0_0000..=0x1fc0_07ff => {
                 // PIF ROM/RAM
@@ -248,12 +248,12 @@ impl Handler<N64Actors, CBusWrite> for SiActor {
                     }
                     _ => unreachable!(),
                 };
-                outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
+                outbox.send::<CpuActor>(WriteFinished {}, time.add(4));
             }
             0x1fc0_0000..=0x1fc0_07ff => {
                 // PIF ROM/RAM
                 // Accept the write instantly
-                outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
+                outbox.send::<CpuActor>(WriteFinished {}, time.add(4));
 
                 let pif_address = (address >> 2) as u16 & 0x1ff;
                 let mut time64: u64 = time.into();
@@ -389,12 +389,12 @@ impl SiActor {
         match self.state {
             SiState::CpuRead => {
                 let data = self.buffer[15];
-                outbox.send::<CpuActor>(ReadFinished::word(data), time)
+                outbox.send::<CpuActor>(ReadFinished {data}, time)
             }
             SiState::DmaRead(1) => {
                 unimplemented!("Write to RDRAM");
             }
-            SiState::CpuWrite => outbox.send::<CpuActor>(WriteFinished::word(), time),
+            SiState::CpuWrite => outbox.send::<CpuActor>(WriteFinished {}, time),
             SiState::DmaWrite(1) => {
                 unimplemented!("Read from RDRAM");
                 // let data_msg = match self.burst {

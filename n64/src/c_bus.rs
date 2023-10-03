@@ -1,4 +1,4 @@
-use actor_framework::{OutboxSend, Time, Handler, Channel, Outbox};
+use actor_framework::{OutboxSend, Time, Handler, Outbox};
 
 use crate::{N64Actors, actors::{cpu_actor::{CpuOutbox, CpuActor}, rsp_actor::RspActor, rdp_actor::RdpActor, vi_actor::ViActor, ai_actor::AiActor, pi_actor::{PiActor, PiRead, PiWrite}, si_actor::SiActor, ri_actor::RiActor}};
 
@@ -54,7 +54,7 @@ pub enum ResourceRequest {
 
 pub struct ResourceReturnRequest {
     request: ResourceRequest,
-    channel: Channel<N64Actors, CpuActor, Resource>,
+    //channel: Channel<N64Actors, CpuActor, Resource>,
 }
 
 impl ResourceReturnRequest {
@@ -65,7 +65,7 @@ impl ResourceReturnRequest {
     {
         outbox.send::<CpuActor>(Self {
             request,
-            channel: Channel::<N64Actors, CpuActor, Resource>::new::<Out::Sender>(),
+            //channel: Channel::<N64Actors, CpuActor, Resource>::new::<Out::Sender>(),
         }, time);
     }
 }
@@ -78,6 +78,12 @@ pub struct CBusWrite {
     pub address: u32,
     pub data: u32
 }
+
+pub struct ReadFinished {
+    pub data: u32
+}
+
+pub struct WriteFinished;
 
 impl CBus {
     pub fn new() -> Self {

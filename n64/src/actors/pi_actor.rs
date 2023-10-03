@@ -3,9 +3,9 @@
 use std::any::TypeId;
 
 use actor_framework::*;
-use crate::{c_bus::{CBusWrite, CBusRead}, d_bus::DBus};
+use crate::{c_bus::{CBusWrite, CBusRead, ReadFinished, WriteFinished}, d_bus::DBus};
 
-use super::{N64Actors, cpu_actor::{ReadFinished, CpuActor, WriteFinished}, bus_actor::{BusPair, request_bus, ReturnBus, BusRequest, BusActor}};
+use super::{N64Actors, cpu_actor::CpuActor, bus_actor::{BusPair, request_bus, ReturnBus, BusRequest, BusActor}};
 
 pub struct PiActor {
     dram_addr: u32,
@@ -21,8 +21,8 @@ pub struct PiActor {
 
 make_outbox!(
     PiOutbox<N64Actors, PiActor> {
-        cpu: ReadFinished,
-        cpu_w: WriteFinished,
+        finish_read: ReadFinished,
+        finish_write: WriteFinished,
         dma: DmaTransfer,
         bus: BusRequest,
         return_bus: Box<BusPair>,
@@ -188,7 +188,7 @@ impl Handler<N64Actors, CBusWrite> for PiActor {
             }
             _ => unreachable!(),
         }
-        outbox.send::<CpuActor>(WriteFinished::word(), time.add(4));
+        outbox.send::<CpuActor>(WriteFinished {}, time.add(4));
 
         SchedulerResult::Ok
     }
@@ -250,7 +250,7 @@ impl Handler<N64Actors, CBusRead> for PiActor {
             }
             _ => unreachable!(),
         };
-        outbox.send::<CpuActor>(ReadFinished::word(data), time.add(4));
+        outbox.send::<CpuActor>(ReadFinished { data }, time.add(4));
 
         SchedulerResult::Ok
     }
@@ -292,7 +292,7 @@ impl Handler<N64Actors, PiRead> for PiActor {
 
         let cycles = domain.calc_cycles(addr, 2);
 
-        outbox.send::<CpuActor>(ReadFinished::word(data), time.add(cycles));
+        outbox.send::<CpuActor>(ReadFinished { data }, time.add(cycles));
 
         SchedulerResult::Ok
     }
