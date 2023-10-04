@@ -61,22 +61,25 @@ impl ActorInit<N64Actors> for PiActor {
 impl PiActor {
     fn read_word(&self, address: u32) -> u32 {
         let address = (address / 2) as usize;
-        if address >= self.rom.len() {
+        if (address + 1) >= self.rom.len() {
             panic!("Read out of bounds: {:#010x}", address);
         }
         (self.rom[address] as u32) << 16 | (self.rom[address + 1] as u32)
     }
 
     fn read_dword(&self, address: u32) -> u64 {
-        let address = (address / 2) as usize;
-        if address >= self.rom.len() {
-            panic!("Read out of bounds: {:#010x}", address);
-        }
+        let half_address = (address / 2) as usize;
+        if (half_address + 3) >= self.rom.len() {
+            // n64brew: open bus reads as the lower half of the last address put on the bus
 
-        (self.rom[address] as u64) << 48
-          | (self.rom[address + 1] as u64) << 32
-          | (self.rom[address + 2] as u64) << 16
-          | (self.rom[address + 3] as u64)
+            // TODO: Correctly implement open bus
+            0xcccccccccccccccc
+        } else {
+            (self.rom[half_address] as u64) << 48
+            | (self.rom[half_address + 1] as u64) << 32
+            | (self.rom[half_address + 2] as u64) << 16
+            | (self.rom[half_address + 3] as u64)
+        }
     }
 
     fn domain(&self, addr: u32) -> &PiDomain {
@@ -408,6 +411,7 @@ impl PiActor {
             // DMA finished
             self.wr_len = 0;
             self.dma_status = DmaStatus::Idle;
+            println!(" PI DMA finished");
         } else {
             self.wr_len -= bytes;
         }
