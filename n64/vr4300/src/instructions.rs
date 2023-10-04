@@ -240,16 +240,13 @@ pub fn decode(inst_word: u32) -> (Instruction, &'static InstructionInfo) {
                 info = &REGIMM_TABLE[inst.rt() as usize];
                 continue;
             }
-            InstructionInfo::CopOp(0) => {
+            InstructionInfo::CopOp(n) => {
                 if inst.rs() < 16 {
-                    info = &COP0_TABLE[inst.rs() as usize];
+                    info = &COP_TABLES[*n as usize][inst.rs() as usize];
                 } else {
-                    info = &COP0_FN_TABLE[inst.funct() as usize];
+                    info = &COP_FN_TABLES[*n as usize][inst.funct() as usize];
                 }
                 continue;
-            }
-            InstructionInfo::CopOp(n) => {
-                unimplemented!("COP{} not implemented - {:08x}", n, inst_word);
             }
             InstructionInfo::Op(_, _, form, _, _) => {
                 return (form.to_instruction(inst), info);
@@ -716,6 +713,31 @@ const fn build_cop0_table() -> [InstructionInfo; 16] {
     ]
 }
 
+const fn build_cop1_table() -> [InstructionInfo; 16] {
+    use InstructionInfo::*;
+
+    [
+        // 0
+        Unimplemented("MFC1", 0x0),
+        Unimplemented("DMFC1", 0x1),
+        Unimplemented("CFC1", 0x2),
+        Reserved,
+        Op("MTC1", 0x4, Form::CopReg, RfMode::SmallImmNoWrite, ExMode::ExUnimplemented),
+        Unimplemented("DMTC1", 0x5),
+        Op("CTC1", 0x6, Form::CopReg, RfMode::SmallImmNoWrite, ExMode::ExUnimplemented),
+        Reserved,
+        // 8
+        Unimplemented("BCC1", 0x8),
+        Reserved,
+        Reserved,
+        Reserved,
+        Reserved,
+        Reserved,
+        Reserved,
+        Reserved,
+    ]
+}
+
 const fn build_cop0_fn_table() -> [InstructionInfo; 64] {
     use InstructionInfo::*;
 
@@ -729,8 +751,65 @@ const fn build_cop0_fn_table() -> [InstructionInfo; 64] {
     return table;
 }
 
+const fn build_cop1_fn_table() -> [InstructionInfo; 64] {
+    use InstructionInfo::*;
+
+    let mut table = [Reserved; 64];
+    table[0] = Unimplemented("ADD", 0);
+    table[1] = Unimplemented("SUB", 1);
+    table[2] = Unimplemented("MUL", 2);
+    table[3] = Unimplemented("DIV", 3);
+    table[4] = Unimplemented("SQRT", 4);
+    table[5] = Unimplemented("ABS", 5);
+    table[6] = Unimplemented("MOV", 6);
+    table[7] = Unimplemented("NEG", 7);
+    table[8] = Unimplemented("ROUND.L", 8);
+    table[9] = Unimplemented("TRUNC.L", 9);
+    table[10] = Unimplemented("CEIL.L", 10);
+    table[11] = Unimplemented("FLOOR.L", 11);
+    table[12] = Unimplemented("ROUND.W", 12);
+    table[13] = Unimplemented("TRUNC.W", 13);
+    table[14] = Unimplemented("CEIL.W", 14);
+    table[15] = Unimplemented("FLOOR.W", 15);
+
+    table[32] = Unimplemented("CVT.S", 32);
+    table[33] = Unimplemented("CVT.D", 33);
+
+    table[36] = Unimplemented("CVT.W", 36);
+    table[37] = Unimplemented("CVT.L", 37);
+
+    table[48] = Unimplemented("C.F", 48);
+    table[49] = Unimplemented("C.UN", 49);
+    table[50] = Unimplemented("C.EQ", 50);
+    table[51] = Unimplemented("C.UEQ", 51);
+    table[52] = Unimplemented("C.OLT", 52);
+    table[53] = Unimplemented("C.ULT", 53);
+    table[54] = Unimplemented("C.OLE", 54);
+    table[55] = Unimplemented("C.ULE", 55);
+    table[56] = Unimplemented("C.SF", 56);
+    table[57] = Unimplemented("C.NGLE", 57);
+    table[58] = Unimplemented("C.SEQ", 58);
+    table[59] = Unimplemented("C.NGL", 59);
+    table[60] = Unimplemented("C.LT", 60);
+    table[61] = Unimplemented("C.NGE", 61);
+    table[62] = Unimplemented("C.LE", 62);
+    table[63] = Unimplemented("C.NGT", 63);
+
+    return table;
+}
+
 const PRIMARY_TABLE: [InstructionInfo; 64] = build_primary_table();
 const SPECIAL_TABLE: [InstructionInfo; 64] = build_special_table();
 const REGIMM_TABLE: [InstructionInfo; 32] = build_regimm_table();
-const COP0_TABLE: [InstructionInfo; 16] = build_cop0_table();
-const COP0_FN_TABLE: [InstructionInfo; 64] = build_cop0_fn_table();
+const COP_TABLES: [[InstructionInfo; 16]; 4] = [
+    build_cop0_table(),
+    build_cop1_table(),
+    [InstructionInfo::Reserved; 16],
+    [InstructionInfo::Reserved; 16]
+];
+const COP_FN_TABLES: [[InstructionInfo; 64]; 4] = [
+    build_cop0_fn_table(),
+    build_cop1_fn_table(),
+    [InstructionInfo::Reserved; 64],
+    [InstructionInfo::Reserved; 64]
+];
