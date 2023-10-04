@@ -59,7 +59,7 @@ fn as_words<const BYTES: usize, const WORDS: usize>(bytes: [u8; BYTES]) -> [u32;
 
     let mut words = [0; WORDS];
     for i in 0..WORDS {
-        words[i] = u32::from_le_bytes(bytes[i * 4..(i + 1) * 4].try_into().unwrap());
+        words[i] = u32::from_be_bytes(bytes[i * 4..(i + 1) * 4].try_into().unwrap());
     }
     words
 }
@@ -159,7 +159,7 @@ impl CpuActor {
         match request {
             BusRead32(req_type, addr) => {
                 let (cycles, bytes) = d_bus.read_bytes(addr);
-                self.finish_read32(outbox, req_type, u32::from_le_bytes(bytes), time.add(cycles), limit)
+                self.finish_read32(outbox, req_type, u32::from_be_bytes(bytes), time.add(cycles), limit)
             }
             BusRead64(_, addr) => {
                 let (cycles, bytes) = d_bus.read_bytes::<8>(addr);

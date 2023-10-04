@@ -54,8 +54,8 @@ impl DBus {
 
         let (cycles, mem) = self.get_slice::<8>(addr);
 
-        let orig = u64::from_le_bytes(mem.try_into().unwrap());
-        let modified = (orig & !mask | data & mask).to_le_bytes();
+        let orig = u64::from_be_bytes(mem.try_into().unwrap());
+        let modified = (orig & !mask | data & mask).to_be_bytes();
         mem.copy_from_slice(&modified);
 
         cycles
@@ -65,7 +65,7 @@ impl DBus {
         assert!(addr & 0x7 == 0, "unaligned qword write");
 
         let (cycles, mem) = self.get_slice::<8>(addr);
-        mem.copy_from_slice(&data.to_le_bytes());
+        mem.copy_from_slice(&data.to_be_bytes());
 
         cycles
     }
