@@ -48,21 +48,22 @@ where
     }
 }
 
-pub trait ActorCreate<ActorNames>: Actor<ActorNames>
+pub trait ActorInit<ActorNames>: Actor<ActorNames>
 where
     ActorNames: MakeNamed,
     Self::OutboxType: Outbox<ActorNames>,
+    Self: Sized,
 {
-    fn new(outbox: &mut Self::OutboxType, time: Time) -> Self;
+    fn init(config: &ActorNames::Config, outbox: &mut Self::OutboxType, time: Time) -> Result<Self, anyhow::Error>;
 }
 
-impl<ActorNames, T> ActorCreate<ActorNames> for T
+impl<ActorNames, T> ActorInit<ActorNames> for T
 where
     ActorNames: MakeNamed,
     T: Actor<ActorNames> + Default,
 {
-    fn new(_outbox: &mut Self::OutboxType, _time: Time) -> T {
-        T::default()
+    fn init(_: &ActorNames::Config, _: &mut Self::OutboxType, _: Time) -> Result<T, anyhow::Error> {
+        Ok(T::default())
     }
 }
 
@@ -92,10 +93,10 @@ impl<ActorNames> Instance<ActorNames>
 where
     ActorNames: MakeNamed,
 {
-    pub fn new() -> Instance<ActorNames> {
-        Instance {
-            scheduler: Scheduler::<ActorNames>::new(),
-        }
+    pub fn new(config: ActorNames::Config) -> Result<Instance<ActorNames>, anyhow::Error> {
+        Ok(Instance {
+            scheduler: Scheduler::<ActorNames>::new(config)?,
+        })
     }
 
     pub fn actor<ActorType>(&mut self) -> &mut ActorType

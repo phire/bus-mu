@@ -2,10 +2,11 @@
 /// PifActor: Emulates the SI (Serial Interface) and the connected PIF
 
 
-use actor_framework::{Actor, Time, Handler, make_outbox, OutboxSend, SchedulerResult, ActorCreate};
+use actor_framework::{Actor, Time, Handler, make_outbox, OutboxSend, SchedulerResult, ActorInit};
+use anyhow::Context;
 use super::{N64Actors, si_actor::{SiPacket, SiActor}};
 
-use crate::{pif, cic};
+use crate::{pif, cic, N64Config};
 
 pub struct PifActor {
     pif_mem: [u32; 512], // Combined PIF RAN and. Last 16 words are RAM
@@ -35,11 +36,12 @@ impl Actor<N64Actors> for PifActor {
     }
 }
 
-impl ActorCreate<N64Actors> for PifActor {
-    fn new(outbox: &mut Self::OutboxType, time: Time) -> Self {
+impl ActorInit<N64Actors> for PifActor {
+    fn init(config: &N64Config, outbox: &mut Self::OutboxType, time: Time) -> Result<PifActor, anyhow::Error> {
         outbox.send::<Self>(PifHleMain{}, time);
 
-        let pif_rom = std::fs::read("pifdata.bin").expect("Error reading PIF Rom from pifdata.bin");
+        let pif_rom = std::fs::read(&config.pif_data)
+            .with_context(|| format!("Failed to read pif_rom from {}", config.pif_data.display()))?;
         let pif_mem: [u32; 512] = pif_rom
             .chunks_exact(4)
             .map(|b| u32::from_be_bytes(b.try_into().unwrap()))
@@ -47,7 +49,7 @@ impl ActorCreate<N64Actors> for PifActor {
             .try_into()
             .expect("Incorrect PIF Rom size");
 
-        PifActor {
+        Ok(PifActor {
             pif_mem,
             state: PifState::WaitCmd,
             addr: 0,
@@ -56,7 +58,7 @@ impl ActorCreate<N64Actors> for PifActor {
             pif_core: pif::PifHle::new(),
             pif_time: 0.into(),
             cic_core: cic::CicHle::new(cic::CIC::Nus6102),
-        }
+        })
     }
 }
 

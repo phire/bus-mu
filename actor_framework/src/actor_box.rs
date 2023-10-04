@@ -1,5 +1,5 @@
 
-use crate::{MakeNamed, MessagePacketProxy, Actor, Outbox, ActorCreate};
+use crate::{MakeNamed, MessagePacketProxy, Actor, Outbox, ActorInit};
 
 #[repr(C)]
 pub struct ActorBoxBase<ActorName>
@@ -20,19 +20,20 @@ where
     pub obj: A,
 }
 
-impl<ActorNames, A> Default for ActorBox<ActorNames, A>
+impl<ActorNames, A> ActorBox<ActorNames, A>
 where
     ActorNames: MakeNamed,
-    A: Actor<ActorNames> + ActorCreate<ActorNames>,
+    A: Actor<ActorNames> + ActorInit<ActorNames>,
     A::OutboxType: Outbox<ActorNames> + Default
 {
-    fn default() -> Self {
+    pub fn with(config: &ActorNames::Config) -> Result<Self, anyhow::Error> {
         let mut outbox = Default::default();
-        let actor = <A as ActorCreate<ActorNames>>::new(&mut outbox, 0.into());
-        ActorBox {
+        let time = 0.into();
+        let actor = <A as ActorInit<ActorNames>>::init(config, &mut outbox, time)?;
+        Ok(ActorBox {
             outbox,
             obj: actor
-        }
+        })
     }
 }
 

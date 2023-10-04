@@ -10,13 +10,11 @@ pub struct ObjectStore<E>
 impl<E> ObjectStore<E> where
     E: MakeNamed,
 {
-    pub fn new() -> ObjectStore<E>
-    where
-        E::StorageType: Default,
+    pub fn with(config: &E::Config) -> Result<ObjectStore<E>, anyhow::Error>
     {
-        Self {
-            storage: Default::default()
-        }
+        Ok(Self {
+            storage: E::storage_with(config)?
+        })
     }
 
     #[inline(always)]

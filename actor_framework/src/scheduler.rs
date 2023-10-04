@@ -76,9 +76,9 @@ impl<ActorNames> Scheduler<ActorNames> where
  {
     const EMPTY_CACHE: ActorNames = ActorNames::TERMINAL;
 
-    pub fn new() -> Scheduler<ActorNames> {
+    pub fn new(config: ActorNames::Config) -> Result<Scheduler<ActorNames>, anyhow::Error> {
         let mut scheduler = Scheduler {
-            actors: ObjectStore::new(),
+            actors: ObjectStore::with(&config)?,
             queue: EnumMap::from_fn(|_| QueueEntry { next: None, prev: None }),
             queue_head: None,
             is_cached: EnumMap::from_fn(|_| UNCACHED),
@@ -118,7 +118,7 @@ impl<ActorNames> Scheduler<ActorNames> where
             });
         }
 
-        scheduler
+        Ok(scheduler)
     }
 
     pub fn get<ActorType>(&mut self) -> &mut ActorType

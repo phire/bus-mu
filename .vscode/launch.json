@@ -9,7 +9,7 @@
             "request": "launch",
             "name": "run bus-mu",
             "program": "${workspaceFolder}/target/debug/bus-mu",
-            "args": [],
+            "args": ["-c", "n64", "--nogui"],
             "cwd": "${workspaceFolder}",
         }
     ]

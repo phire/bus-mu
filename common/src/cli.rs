@@ -50,7 +50,12 @@ macro_rules! register_cores {
             }
         }
 
-        fn parse_args_with<GlobalOpts>(core: Option<Cores>) -> GlobalOpts
+        /// Parse the command line arguments for a given core
+        /// Doesn't return on validation error or help/version flags
+        /// Returns the global options and per-core options
+        ///
+        /// If Core is None, returns only the global options
+        fn parse_args_with<GlobalOpts>(core: Option<Cores>) -> (GlobalOpts, Box<dyn std::any::Any>)
         where
             GlobalOpts: clap::FromArgMatches + clap::Args,
         {
@@ -65,7 +70,7 @@ macro_rules! register_cores {
             } else {
                 let cli = GlobalOpts::augment_args(clap::Command::new(""));
 
-                GlobalOpts::from_arg_matches(&cli.get_matches()).unwrap()
+                (GlobalOpts::from_arg_matches(&cli.get_matches()).unwrap(), Box::new(()))
             }
         }
 

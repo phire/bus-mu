@@ -1,4 +1,4 @@
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::{sync::mpsc::{self, Receiver, SyncSender}, any::Any};
 
 pub mod cli;
 
@@ -10,18 +10,18 @@ pub trait EmulationCore: Sync + Send {
     fn short_name(&self) -> &'static str;
 
     // Create an instance of the core
-    fn new(&self) -> Result<Box<dyn Instance + Send>, anyhow::Error>;
+    fn new(&self, config: Box<dyn Any>) -> Result<Box<dyn Instance + Send>, anyhow::Error>;
 
     /// Create a single-threaded instance of the core.
     /// Override the default implementation if your core doesn't implement Send
-    fn new_sync(&self) -> Result<Box<dyn Instance>, anyhow::Error> {
-        Ok(self.new()?)
+    fn new_sync(&self, config: Box<dyn Any>) -> Result<Box<dyn Instance>, anyhow::Error> {
+        Ok(self.new(config)?)
     }
 
     /// Create a multi-threaded instance of the core.
     /// The default implementation calls `new()` and wraps it with `ThreadAdapter`
-    fn new_threadded(&self) -> Result<Box<dyn ThreadedInstance>, anyhow::Error> {
-        Ok(Box::new(ThreadAdapter::new(self.new()?)?))
+    fn new_threaded(&self, config: Box<dyn Any>) -> Result<Box<dyn ThreadedInstance>, anyhow::Error> {
+        Ok(Box::new(ThreadAdapter::new(self.new(config)?)?))
     }
 
     /// Called while running to draw the core's UI
@@ -47,7 +47,7 @@ where
 {
     //type Parser : clap::Parser;
 
-    fn parse_args(&self) -> GlobalOpts;
+    fn parse_args(&self) -> (GlobalOpts, Box<dyn Any>);
 
 }
 

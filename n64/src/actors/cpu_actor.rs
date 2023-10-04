@@ -2,12 +2,12 @@
 
 /// CpuActor: Emulates the CPU and MI (Mips Interface)
 
-use actor_framework::{Actor, Time, Handler,  OutboxSend, SchedulerResult, ActorCreate, Outbox};
+use actor_framework::{Actor, Time, Handler,  OutboxSend, SchedulerResult, ActorInit, Outbox};
 use super::{N64Actors, pi_actor, bus_actor::{BusPair, ReturnBus, request_bus}};
 
 use vr4300::{self, RequestType};
 
-use crate::{actors::bus_actor::{BusActor, BusRequest}, c_bus::{self, CBus}, d_bus::DBus};
+use crate::{actors::bus_actor::{BusActor, BusRequest}, c_bus::{self, CBus}, d_bus::DBus, N64Config};
 
 pub struct CpuActor {
     committed_time: Time,
@@ -328,10 +328,10 @@ impl Actor<N64Actors> for CpuActor {
     }
 }
 
-impl ActorCreate<N64Actors> for CpuActor {
-    fn new(outbox: &mut CpuOutbox, time: Time) -> CpuActor {
+impl ActorInit<N64Actors> for CpuActor {
+    fn init(_config: &N64Config, outbox: &mut CpuOutbox, time: Time) -> Result<CpuActor, anyhow::Error> {
         outbox.send::<CpuActor>(CpuRun {}, time);
-        CpuActor {
+        Ok(CpuActor {
             committed_time: Default::default(),
             _cpu_overrun: 0,
             cpu_core: Default::default(),
@@ -341,7 +341,7 @@ impl ActorCreate<N64Actors> for CpuActor {
             bus_free: Default::default(),
             recursion: 0,
             interrupted_msg: Default::default(),
-        }
+        })
     }
 }
 

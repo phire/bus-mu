@@ -1,4 +1,5 @@
 use actor_framework::Named;
+use crate::N64Config;
 
 pub mod cpu_actor;
 pub mod pif_actor;
@@ -13,7 +14,7 @@ pub mod ri_actor;
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 #[derive(Named)]
-#[named(base(actor_framework::ActorBox))]
+#[named(base(actor_framework::ActorBox), config(N64Config))]
 pub enum N64Actors {
     #[named(class(cpu_actor::CpuActor))]
     CpuActor,

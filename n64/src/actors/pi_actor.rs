@@ -3,7 +3,8 @@
 use std::any::TypeId;
 
 use actor_framework::*;
-use crate::{c_bus::{CBusWrite, CBusRead, ReadFinished, WriteFinished}, d_bus::DBus};
+use anyhow::Context;
+use crate::{c_bus::{CBusWrite, CBusRead, ReadFinished, WriteFinished}, d_bus::DBus, N64Config};
 
 use super::{N64Actors, cpu_actor::CpuActor, bus_actor::{BusPair, request_bus, ReturnBus, BusRequest, BusActor}};
 
@@ -29,9 +30,13 @@ make_outbox!(
     }
 );
 
-impl Default for PiActor {
-    fn default() -> Self {
-        let rom_bytes = std::fs::read("n64-systemtest.z64").expect("Error loading n64-systemtest.z64");
+impl ActorInit<N64Actors> for PiActor {
+    fn init(config: &N64Config, _: &mut PiOutbox, _: Time) -> Result<Self, anyhow::Error> {
+        let rom_path = config.rom.clone().ok_or(anyhow::anyhow!("No rom specified"))?;
+
+        let rom_bytes = std::fs::read(&rom_path)
+            .with_context(|| format!("Failed to read rom file: {}", rom_path.display()))?;
+
         let rom = rom_bytes
             .chunks_exact(2)
             .map(|b| u16::from_be_bytes(b.try_into().unwrap()))
@@ -39,7 +44,7 @@ impl Default for PiActor {
 
         println!("Loaded rom with {} bytes", rom.len() * 2);
 
-        Self {
+        Ok(Self {
             dram_addr: 0,
             cart_addr: 0,
             wr_len: 0,
@@ -49,7 +54,7 @@ impl Default for PiActor {
             domains: Default::default(),
             rom,
             bus: None,
-        }
+        })
     }
 }
 

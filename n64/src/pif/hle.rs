@@ -108,7 +108,7 @@ impl PifHle {
 
     pub fn main(&mut self, io: &mut dyn PifIO, time: Time) -> Time{
         let next_time = time.add(13653);
-        println!("PIF: main {:?} cmd: {:02x} @ {}", self.state, io.read_command(), time);
+        //println!("PIF: main {:?} cmd: {:02x} @ {}", self.state, io.read_command(), time);
         let initial_state = self.state;
 
         match self.state {
@@ -207,7 +207,9 @@ impl PifHle {
                 // do nothing
             }
 
-            State::Error => todo!("Reset the CPu"),
+            State::Error => {
+                todo!("Reset the CPU");
+            }
         }
         if initial_state != self.state {
             println!("PIF: state {:?} -> {:?}", initial_state, self.state);

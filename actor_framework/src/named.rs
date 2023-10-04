@@ -20,8 +20,11 @@ pub trait MakeNamed : From<usize> + Into<usize> + PartialEq + Copy + 'static + s
     const COUNT: usize;
     const TERMINAL: Self; // Scheduler uses this as an actor that never get scheduled
     type Base<A> where A: Actor<Self>, Self: Sized;
-    type StorageType: Default + AsBase<Self> + Send;
+    type StorageType: AsBase<Self> + Send;
     type ArrayType<T> : Send where T: Send;
+    type Config : Send;
+
+    fn storage_with(config: &Self::Config) -> Result<Self::StorageType, anyhow::Error>;
 
     fn iter() -> NamedIterator<Self> where Self: Sized, Self: From<usize> {
         NamedIterator {

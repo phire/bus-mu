@@ -1,3 +1,5 @@
+use std::any::Any;
+
 use common::{EmulationCore, Status};
 use eframe::egui;
 
@@ -8,12 +10,12 @@ struct BusMuApp {
 }
 
 impl BusMuApp {
-    fn new(_cc: &eframe::CreationContext<'_>, core: &'static dyn EmulationCore) -> Result<Self, anyhow::Error> {
+    fn new(_cc: &eframe::CreationContext<'_>, core: &'static dyn EmulationCore, config: Box<dyn Any>) -> Result<Self, anyhow::Error> {
         // Customize egui here with cc.egui_ctx.set_fonts and cc.egui_ctx.set_visuals.
         // Restore app state using cc.storage (requires the "persistence" feature).
         // Use the cc.gl (a glow::Context) to create graphics shaders and buffers that you can use
         // for e.g. egui::PaintCallback.
-        let instance = core.new_threadded()?;
+        let instance = core.new_threaded(config)?;
         Ok(Self {
             active_core: Some(core),
             instance: Some(instance),
@@ -57,7 +59,7 @@ impl eframe::App for BusMuApp {
    }
 }
 
-pub fn run(core: Option<&'static dyn EmulationCore>, cores: Vec<&'static dyn EmulationCore>) -> Result<(), anyhow::Error> {
+pub fn run(core: Option<&'static dyn EmulationCore>, config: Box<dyn Any>, cores: Vec<&'static dyn EmulationCore>) -> Result<(), anyhow::Error> {
     let core = match core {
         Some(core) => core,
         None => {
@@ -70,7 +72,7 @@ pub fn run(core: Option<&'static dyn EmulationCore>, cores: Vec<&'static dyn Emu
     let result = eframe::run_native(
         "Bus-mu",
         native_options,
-        Box::new(|cc| Box::new(BusMuApp::new(cc, core).unwrap()))
+        Box::new(|cc| Box::new(BusMuApp::new(cc, core, config).unwrap()))
     );
     result.map_err(|e| anyhow::anyhow!("eframe error: {:?}", e))
 }

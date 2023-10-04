@@ -42,6 +42,7 @@ impl Variant {
 struct NamedEnum {
     data: Data<Variant, Ignored>,
     base: PathList,
+    config: PathList,
 }
 
 #[proc_macro_derive(Named, attributes(named, exit_reason))]
@@ -53,14 +54,18 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
 
     let storage_type = quote::format_ident!("{}Storage", ident);
     let storage_type_inner = quote::format_ident!("{}StorageInner", ident);
+    let config_obj = quote::format_ident!("config");
+
     let base = &named_enum.base[0];
+    let config = &named_enum.config[0];
     let mut terminal : Option<proc_macro2::Ident> = None;
 
     let mut from_patterns = Vec::new();
     let mut size_patterns = Vec::new();
     let mut storage_patterns = Vec::new();
+    let mut storage_new = Vec::new();
 
-    let mut classes = Vec::new();
+    let mut impls = Vec::new();
 
     let mut varients = Vec::new();
     let mut varients_lower = Vec::new();
@@ -83,7 +88,10 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
             storage_patterns.push(quote! {
                 #lower_name: #base<#ident, ()>,
             });
-            classes.push(quote! {
+            storage_new.push(quote! {
+                #lower_name: <#base<#ident, ()>>::with(#config_obj)?,
+            });
+            impls.push(quote! {
                 impl actor_framework::Named<#ident> for () {
                     #[inline(always)] fn name() -> #ident { #ident::#name }
                     #[inline(always)] fn dyn_name(&self) -> #ident { #ident::#name }
@@ -108,8 +116,11 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
         storage_patterns.push(quote! {
             #lower_name: #base<#ident, #class_path>,
         });
+        storage_new.push(quote! {
+            #lower_name: <#base<#ident, #class_path>>::with(#config_obj)?,
+        });
 
-        classes.push(quote! {
+        impls.push(quote! {
             impl actor_framework::Named<#ident> for #class_path {
                 #[inline(always)] fn name() -> #ident { #ident::#name }
                 #[inline(always)] fn dyn_name(&self) -> #ident { #ident::#name }
@@ -133,7 +144,7 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
 
     let output = quote! {
 
-        #(#classes)*
+        #(#impls)*
 
         impl actor_framework::MakeNamed for #ident {
             const COUNT: usize = #count;
@@ -142,6 +153,22 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
             //type ExitReason = Box<dyn #exit_reason>;
             type StorageType = #storage_type;
             type ArrayType<T> = [T; #count] where T: Send;
+            type Config = #config;
+
+            fn storage_with(#config_obj: &#config) -> Result<#storage_type, anyhow::Error> {
+                let inner = Box::new(#storage_type_inner {
+                    #(#storage_new)*
+                });
+                let base_ptrs = core::array::from_fn(|i| {
+                    let id: #ident = i.into();
+                    inner.base_ptr(id) as usize
+                });
+
+                Ok(#storage_type {
+                    inner,
+                    base_ptrs,
+                })
+            }
 
             fn size_of(id: Self) -> usize {
                 match id {
@@ -201,23 +228,6 @@ pub fn derive_named(input: TokenStream) -> TokenStream {
                 unsafe {
                     let ptr: *mut actor_framework::ActorBoxBase<#ident> = std::mem::transmute(ptr);
                     ptr.as_ref().unwrap_unchecked()
-                }
-            }
-        }
-
-        impl Default for #storage_type {
-            fn default() -> Self {
-                let inner = Box::new(#storage_type_inner {
-                    #(#varients_lower: Default::default(),)*
-                });
-                let base_ptrs = core::array::from_fn(|i| {
-                    let id: #ident = i.into();
-                    inner.base_ptr(id) as usize
-                });
-
-                Self {
-                    inner,
-                    base_ptrs,
                 }
             }
         }
