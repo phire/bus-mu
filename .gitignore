@@ -1,3 +1,4 @@
 /target
 pifdata.bin
 *.z64
+.DS_Store
