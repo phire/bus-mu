@@ -203,14 +203,14 @@ impl DataCacheAttempt {
         self.tag == tlb_tag && self.tag.is_valid()
     }
 
-    pub fn do_miss(self, dcache: &DCache, tlb_tag: CacheTag, size: u8, is_store: bool, store_value: u64) -> MemoryReq {
+    pub fn do_miss(self, dcache: &DCache, tlb_tag: CacheTag, size: u8, is_store: bool, value: u64) -> MemoryReq {
         let line = self.line as u32;
         let physical_address = tlb_tag.tag() | ((line << 4) & 0xfff);
 
         if tlb_tag.is_uncached() {
             let full_physical_address = physical_address | self.offset as u32;
             if is_store {
-                MemoryReq::UncachedDataWrite(full_physical_address, size, store_value)
+                MemoryReq::UncachedDataWrite(full_physical_address, size, value)
             } else {
                 MemoryReq::UncachedDataRead(full_physical_address, size)
             }
@@ -226,16 +226,16 @@ impl DataCacheAttempt {
         }
     }
 
-    pub fn write(self, dcache: &mut DCache, size: usize, data: u64) {
+    pub fn write(self, dcache: &mut DCache, size: usize, value: u64) {
         let word_offset = self.offset as usize >> 2;
         let line = self.line as usize;
         match size {
             4 => {
-                dcache.data[line][word_offset] = data as u32;
+                dcache.data[line][word_offset] = value as u32;
             }
             8 => {
-                dcache.data[line][word_offset] = (data >> 32) as u32;
-                dcache.data[line][word_offset + 1] = data as u32;
+                dcache.data[line][word_offset] = (value >> 32) as u32;
+                dcache.data[line][word_offset + 1] = value as u32;
             }
             _ => todo!("Implement smaller writes")
         }

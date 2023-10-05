@@ -24,7 +24,7 @@ struct RegisterFile {
     temp: u64, // Either result of jump calculation, or value to store
     writeback_reg: u8,
     ex_mode: ExMode,
-    store: bool,
+    mem_mode: Option<MemMode>,
 }
 
 struct Execute {
@@ -33,19 +33,21 @@ struct Execute {
     addr: u64,
     skip_next: bool, // Used to skip the op about to be executed in RF stage
     mem_size: u8, // 0 is no mem access
-    store: bool,
+    mem_mode: Option<MemMode>,
     trap: bool,
     writeback_reg: u8,
 
     // internal storage
     hilo: [u64; 2],
+    ll_bit: bool,
+    ll_addr: u64,
 }
 struct DataCache {
     cache_attempt: DataCacheAttempt,
     tlb_tag: CacheTag,
     writeback_reg: u8,
     alu_out: u64,
-    store: bool,
+    mem_mode: Option<MemMode>,
     mem_size: u8,
 }
 struct WriteBack {
@@ -59,6 +61,15 @@ pub struct Pipeline {
     dc: DataCache,
     wb: WriteBack,
     pub(crate) regs: RegFile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemMode
+{
+    Load,
+    Store,
+    ConditionalStore,
+    ConditionalStoreFail,
 }
 
 pub enum MemoryReq
@@ -137,27 +148,53 @@ impl Pipeline {
             debug_assert!(self.wb.stalled == false);
 
             // TODO: CP0 bypass interlock
-            let mut writeback_value = self.dc.alu_out;
+            let mut value = self.dc.alu_out;
+
+            if self.dc.mem_mode.is_some() {
+                assert!(self.dc.mem_size != 0);
+            }
 
             // Finish DCache access from last stage
-            if self.dc.mem_size != 0 {
+            if let Some(mem_mode) = self.dc.mem_mode {
                 let cache_attempt = self.dc.cache_attempt;
                 let tlb_tag = self.dc.tlb_tag;
+                let mem_size = self.dc.mem_size as usize;
+
                 if cache_attempt.is_hit(tlb_tag) {
-                    let mem_size = self.dc.mem_size as usize;
-                    if self.dc.store {
-                        cache_attempt.write(dcache, mem_size, writeback_value);
-                    } else {
-                        writeback_value = cache_attempt.read(&dcache, mem_size);
+                    match mem_mode {
+                        MemMode::Store => cache_attempt.write(dcache, mem_size, value),
+                        MemMode::Load => value = cache_attempt.read(dcache, mem_size),
+                        MemMode::ConditionalStoreFail => value = 0,
+                        MemMode::ConditionalStore => {
+                            cache_attempt.write(dcache, mem_size, value);
+                            value = 1;
+                        }
                     }
                 } else {
                     self.wb.stalled = true;
-                    return ExitReason::Mem(cache_attempt.do_miss(&dcache, tlb_tag, self.dc.mem_size, self.dc.store, writeback_value));
+                    let do_miss = |is_store| {
+                        cache_attempt.do_miss(&dcache, tlb_tag, mem_size as u8, is_store, value)
+                    };
+                    match mem_mode {
+                        MemMode::Load => { return ExitReason::Mem(do_miss(false)); }
+                        MemMode::Store => { return ExitReason::Mem(do_miss(true)); }
+                        MemMode::ConditionalStore => {
+                            // HWTEST: According to @Lemmy, LL/SC act just like LW/SW
+                            //         Which means we need to write LLBit to RT here for uncached addresses
+                            if tlb_tag.is_uncached() {
+                                self.regs.write(self.dc.writeback_reg, 1);
+                            }
+                            return ExitReason::Mem(do_miss(true));
+                        } MemMode::ConditionalStoreFail => {
+                            // HWTEST: And suggests that SC fails aborts the memory operation or suppresses exceptions
+                            self.regs.write(self.dc.writeback_reg, 0);
+                        }
+                    };
                 }
             }
 
             // Register file writeback
-            self.regs.write(self.dc.writeback_reg, writeback_value);
+            self.regs.write(self.dc.writeback_reg, value);
         }
 
         let mut writeback_has_work = false;
@@ -167,22 +204,25 @@ impl Pipeline {
         // ==================
         {
             // Clear previous op
-            self.dc.mem_size = 0;
+            self.dc.mem_mode = None;
             self.dc.writeback_reg = 0;
 
-            if self.ex.mem_size != 0 {
+            if let Some(_mem_mode) = self.ex.mem_mode {
                 let addr = self.ex.addr;
 
                 self.dc.cache_attempt = dcache.open(addr);
                 // TODO: Implement TLB lookups
                 self.dc.tlb_tag = CacheTag::new_uncached((addr as u32) & 0x1fff_ffff);
             }
+            if self.ex.mem_mode.is_some() {
+                assert!(self.ex.mem_size != 0);
+            }
 
-            if self.ex.mem_size != 0 || self.ex.writeback_reg != 0 {
+            if self.ex.mem_mode.is_some() || self.ex.writeback_reg != 0 {
                 // Forward from EX
                 self.dc.alu_out = self.ex.alu_out;
                 self.dc.writeback_reg = self.ex.writeback_reg;
-                self.dc.store = self.ex.store;
+                self.dc.mem_mode = self.ex.mem_mode;
                 self.dc.mem_size = self.ex.mem_size;
                 writeback_has_work = true;
             }
@@ -192,7 +232,7 @@ impl Pipeline {
         // Stage 3: Execute
         // ================
         {
-            self.ex.mem_size = 0;
+            self.ex.mem_mode = None;
             self.ex.writeback_reg = 0;
 
             // PERF: we might be able to move this skip logic into the jump table
@@ -229,9 +269,9 @@ impl Pipeline {
 
                 self.regs.bypass(
                     self.ex.writeback_reg,
-                    match self.ex.mem_size {
-                        0 => Some(self.ex.alu_out),
-                        _ => None
+                    match self.ex.mem_mode {
+                        Some(_) => Some(self.ex.alu_out),
+                        None => None
                     });
 
                 // ICache hit. We can continue with the rest of this stage
@@ -301,6 +341,7 @@ impl Pipeline {
 
         if let InstructionInfo::Op(_, _, _, rf_mode, ex_mode) = *inst_info {
             rf.ex_mode = ex_mode;
+            rf.mem_mode = None;
             //println!("RF: {:?}", rf_mode);
             match rf_mode {
                 // PERF: This could be simplified down to just a few flags
@@ -348,7 +389,7 @@ impl Pipeline {
                     rf.alu_a = regfile.read(i.rs());
                     rf.alu_b = i.imm() as i16 as u64;
                     rf.writeback_reg = i.rt();
-                    rf.store = false;
+                    rf.mem_mode = Some(MemMode::Load);
                 }
                 RfMode::ImmUnsigned => {
                     rf.alu_a = regfile.read(i.rs());
@@ -360,7 +401,7 @@ impl Pipeline {
                     rf.alu_b = i.imm() as i16 as u64;
                     rf.writeback_reg = 0;
                     rf.temp = regfile.read(i.rt());
-                    rf.store = true;
+                    rf.mem_mode = Some(MemMode::Store);
                 }
                 RfMode::RegReg => {
                     rf.alu_a = regfile.read(r.rs());
@@ -617,17 +658,30 @@ impl Pipeline {
                 ex.addr = rf.alu_a.wrapping_add(rf.alu_b);
                 ex.alu_out = rf.temp;
                 ex.mem_size = size;
-                ex.store = rf.store;
+                ex.mem_mode = rf.mem_mode;
             }
             ExMode::MemUnsigned(size) => {
                 ex.addr = rf.alu_a.wrapping_add(rf.alu_b);
                 ex.alu_out = rf.temp;
                 ex.mem_size = size;
-                ex.store = rf.store;
+                ex.mem_mode = rf.mem_mode;
             }
             ExMode::MemLeft(_) => todo!(),
             ExMode::MemRight(_) => todo!(),
-            ExMode::MemLinked(_) => todo!(),
+            ExMode::MemLoadLinked(size) => {
+                ex.addr = rf.alu_a.wrapping_add(rf.alu_b);
+                ex.alu_out = rf.temp;
+                ex.mem_size = size;
+                ex.ll_bit = true;
+                ex.ll_addr = ex.addr;
+                ex.mem_mode = Some(MemMode::Load);
+            }
+            ExMode::MemStoreConditional(size) => {
+                ex.addr = rf.alu_a.wrapping_add(rf.alu_b);
+                ex.alu_out = rf.temp;
+                ex.mem_size = size;
+                ex.mem_mode = Some(if ex.ll_bit { MemMode::ConditionalStore } else { MemMode::ConditionalStoreFail });
+            }
             ExMode::LoadInternal(reg) => {
                 // HWTEST: The VR manual says accessing these registers more than two cycles before
                 //         and an instruction that uses to them is undefined (if an exception happens)
@@ -698,12 +752,13 @@ impl Pipeline {
                 if self.dc.writeback_reg != 0 {
                     self.regs.write(self.dc.writeback_reg, value);
                     self.dc.writeback_reg = 0;
+
                 }
-                self.dc.mem_size = 0;
+                self.dc.mem_mode = None;
                 self.wb.stalled = false;
             }
             MemoryResponce::UncachedDataWrite => {
-                self.dc.mem_size = 0;
+                self.dc.mem_mode = None;
                 self.wb.stalled = false;
             }
         }
@@ -730,7 +785,7 @@ pub fn create() -> Pipeline {
             temp: 0,
             writeback_reg: 0,
             ex_mode: ExMode::Nop,
-            store: false,
+            mem_mode: None,
         },
         ex: Execute{
             next_pc: reset_pc,
@@ -738,17 +793,19 @@ pub fn create() -> Pipeline {
             addr: 0,
             skip_next: false,
             mem_size: 0,
-            store: false,
+            mem_mode: None,
             trap: false,
             writeback_reg: 0,
             hilo: [0, 0],
+            ll_bit: false,
+            ll_addr: 0,
         },
         dc: DataCache{
             cache_attempt: DataCacheAttempt::empty(),
             tlb_tag: CacheTag::empty(),
             writeback_reg: 0,
             alu_out: 0,
-            store: false,
+            mem_mode: None,
             mem_size: 0,
         },
         wb: WriteBack{
