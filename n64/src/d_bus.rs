@@ -1,62 +1,45 @@
+use common::util::ByteMask8;
+
 
 pub struct DBus {
     banks: [RambusBank; 4],
+    /// Put all memory in a single, continuous allocation
+    mem_data: Box<[u64; 4 * 1024 * 1024 / 8]>, // 4MB
 }
 
 impl DBus {
     pub fn new() -> Self {
         Self {
             banks: [RambusBank::new(), RambusBank::new(), RambusBank::new(), RambusBank::new()],
+            mem_data: Box::new([0; 4 * 1024 * 1024 / 8]),
         }
     }
 
-    fn get_slice<const COUNT: usize>(&mut self, addr: u32) -> (u64, &mut [u8]) {
+    fn access_column(&mut self, addr: u32) -> (u64, &mut u64) {
         let bank_id = (addr as usize >> 20) & 0x3;
         let row = (addr as usize >> 11) & 0x1ff;
-        let col = addr as usize & 0x7ff;
+        let _col = (addr as usize & 0x7ff) >> 3;
+        let offset = (addr as usize & 0x3fffff) >> 3;
 
         let bank = &mut self.banks[bank_id];
 
-        let mut cycles = COUNT as u64 / 8;
+        let mut cycles = 1;
 
         if bank.sensed_row != Some(row as u16) {
             cycles += bank.open_row(row as u16);
         }
-        // TODO: What happens if we cross a row boundary?
-        if (col + COUNT) > 0x800 {
-            todo!("Crossing row boundary");
-        }
 
-        let bank_addr = row << 11 | col;
-        let data = &mut bank.mem[bank_addr..bank_addr + COUNT];
+        let data = &mut self.mem_data[offset];
 
         (cycles, data)
     }
 
-    pub fn read_bytes<const COUNT: usize>(&mut self, addr: u32) -> (u64, [u8; COUNT]) {
-        let (cycles, mem) = self.get_slice::<COUNT>(addr);
 
-        let data = mem[..COUNT].try_into().unwrap();
-
-        (cycles, data)
-    }
-
-    pub fn write_bytes<const COUNT: usize>(&mut self, addr: u32, data: [u8; COUNT]) -> u64 {
-        let (cycles, mem) = self.get_slice::<COUNT>(addr);
-
-        mem.copy_from_slice(&data);
-
-        cycles
-    }
-
-    pub fn write_qword_masked(&mut self, addr: u32, data: u64, mask: u64) -> u64 {
+    pub fn write_qword_masked(&mut self, addr: u32, data: u64, mask: ByteMask8) -> u64 {
         assert!(addr & 0x7 == 0, "unaligned qword write");
 
-        let (cycles, mem) = self.get_slice::<8>(addr);
-
-        let orig = u64::from_be_bytes(mem.try_into().unwrap());
-        let modified = (orig & !mask | data & mask).to_be_bytes();
-        mem.copy_from_slice(&modified);
+        let (cycles, mem) = self.access_column(addr);
+        mask.masked_insert(mem, data);
 
         cycles
     }
@@ -64,16 +47,22 @@ impl DBus {
     pub fn write_qword(&mut self, addr: u32, data: u64) -> u64 {
         assert!(addr & 0x7 == 0, "unaligned qword write");
 
-        let (cycles, mem) = self.get_slice::<8>(addr);
-        mem.copy_from_slice(&data.to_be_bytes());
+        let (cycles, mem) = self.access_column(addr);
+        *mem = data;
 
         cycles
+    }
+
+    pub fn read_qword(&mut self, addr: u32) -> (u64, u64) {
+        assert!(addr & 0x7 == 0, "unaligned qword write");
+
+        let (cycles, mem) = self.access_column(addr);
+        (cycles, *mem)
     }
 }
 
 
 pub struct RambusBank {
-    mem: Box<[u8; 1024 * 1024]>, // 1MB
     sensed_row: Option<u16>,
     dirty: bool,
 }
@@ -81,7 +70,6 @@ pub struct RambusBank {
 impl RambusBank {
     pub fn new() -> Self {
         Self {
-            mem:Box::new([0; 1024 * 1024]),
             sensed_row: None,
             dirty: false,
         }

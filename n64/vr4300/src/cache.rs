@@ -1,3 +1,5 @@
+use common::util::ByteMask8;
+
 use super::pipeline::MemoryReq;
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
@@ -154,21 +156,24 @@ impl ICache {
         );
     }
 
-    pub fn finish_fill(&mut self, line: usize, tag: CacheTag, data: [u32; 8]) {
-        self.data[line] = data;
+    pub fn finish_fill(&mut self, line: usize, tag: CacheTag, data: [u64; 4]) {
+        for (i, double) in data.into_iter().enumerate() {
+            self.data[line][i << 1] = (double >> 32) as u32;
+            self.data[line][(i << 1) + 1] = double as u32;
+        }
         self.tag[line] = tag;
     }
 }
 
 pub struct DCache {
-    data: [[u32; 4]; 512],
+    data: [[u64; 2]; 512],
     tag: [CacheTag; 512],
 }
 
 impl DCache {
     pub fn new() -> DCache {
         DCache {
-            data: [[0; 4]; 512],
+            data: [[0; 2]; 512],
             tag: [CacheTag::invalid(); 512],
         }
     }
@@ -203,16 +208,17 @@ impl DataCacheAttempt {
         self.tag == tlb_tag && self.tag.is_valid()
     }
 
-    pub fn do_miss(self, dcache: &DCache, tlb_tag: CacheTag, size: u8, is_store: bool, value: u64) -> MemoryReq {
+    pub fn do_miss(self, dcache: &DCache, tlb_tag: CacheTag, size: u8, is_store: bool, value: u64, mask: ByteMask8) -> MemoryReq {
         let line = self.line as u32;
         let physical_address = tlb_tag.tag() | ((line << 4) & 0xfff);
 
         if tlb_tag.is_uncached() {
             let full_physical_address = physical_address | self.offset as u32;
-            if is_store {
-                MemoryReq::UncachedDataWrite(full_physical_address, size, value)
-            } else {
-                MemoryReq::UncachedDataRead(full_physical_address, size)
+            match (is_store, size) {
+                (false, 8) => MemoryReq::UncachedDataReadDouble(full_physical_address),
+                (false, _) => MemoryReq::UncachedDataReadWord(full_physical_address),
+                (true, 8) => MemoryReq::UncachedDataWriteDouble(full_physical_address, value, mask),
+                (true, _) => MemoryReq::UncachedDataWriteWord(full_physical_address, value, mask),
             }
         } else if self.tag.is_dirty() {
             let flush_physical_address = self.tag.tag() | line;
@@ -226,41 +232,26 @@ impl DataCacheAttempt {
         }
     }
 
-    pub fn write(self, dcache: &mut DCache, size: usize, value: u64) {
-        let word_offset = self.offset as usize >> 2;
+    pub fn write(self, dcache: &mut DCache, value: u64, mask: ByteMask8) {
+        let dword_offset = self.offset as usize >> 3;
         let line = self.line as usize;
-        match size {
-            4 => {
-                dcache.data[line][word_offset] = value as u32;
-            }
-            8 => {
-                dcache.data[line][word_offset] = (value >> 32) as u32;
-                dcache.data[line][word_offset + 1] = value as u32;
-            }
-            _ => todo!("Implement smaller writes")
-        }
+        mask.masked_insert(&mut dcache.data[line][dword_offset], value);
     }
 
-    pub fn read(self, dcache: &DCache, size: usize) -> u64 {
-        let word_offset = self.offset as usize >> 2;
+    pub fn read(self, dcache: &DCache) -> u64 {
+        let dword_offset = self.offset as usize >> 3;
         let line = self.line as usize;
-        return match size {
-            4 => {
-                dcache.data[line][word_offset] as u64
-            }
-            8 => {
-                let upper = dcache.data[line][word_offset] as u64;
-                let lower = dcache.data[line][word_offset + 1] as u64;
-                upper << 32 | lower
-            }
-            _ => todo!("Implement smaller writes")
-        }
+        dcache.data[line][dword_offset]
     }
 
-    pub fn finish_fill(&mut self, dcache: &mut DCache, new_tag: CacheTag, data: [u32; 4]) {
+    pub fn finish_fill(&mut self, dcache: &mut DCache, new_tag: CacheTag, data: [u64; 2]) {
         self.tag = new_tag;
         dcache.data[self.line as usize] = data;
         dcache.tag[self.line as usize] = new_tag;
+    }
+
+    pub fn offset(&self) -> u8 {
+        self.offset
     }
 
 }

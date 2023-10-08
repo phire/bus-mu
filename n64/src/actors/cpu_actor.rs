@@ -14,7 +14,7 @@ pub struct CpuActor {
     _cpu_overrun: u32,
     pub cpu_core: vr4300::Core,
     outstanding_mem_request: Option<vr4300::BusRequest>,
-    req_type: Option<vr4300::RequestType>,
+    c_bus_req: Option<(u32, vr4300::RequestType)>,
     bus_free: Time,
     bus: Option<Box<BusPair>>,
     /// tracks how many times `CpuActor::advance` has been called recursively
@@ -52,26 +52,6 @@ fn to_cpu_time(bus_time: u64, odd: u64) -> u64 {
 fn to_bus_time(cpu_time: u64, odd: u64) -> u64 {
     // CPU has a 1.5x clock multiplier
     cpu_time - ((cpu_time + odd * 2) / 3u64)
-}
-
-fn as_words<const BYTES: usize, const WORDS: usize>(bytes: [u8; BYTES]) -> [u32; WORDS] {
-    assert!(BYTES == WORDS * 4);
-
-    let mut words = [0; WORDS];
-    for i in 0..WORDS {
-        words[i] = u32::from_be_bytes(bytes[i * 4..(i + 1) * 4].try_into().unwrap());
-    }
-    words
-}
-
-fn as_bytes<const BYTES: usize, const WORDS: usize>(words: [u32; WORDS]) -> [u8; BYTES] {
-    assert!(BYTES == WORDS * 4);
-
-    let mut bytes = [0; BYTES];
-    for i in 0..WORDS {
-        bytes[i * 4..(i + 1) * 4].copy_from_slice(&words[i].to_le_bytes());
-    }
-    bytes
 }
 
 impl CpuActor {
@@ -129,25 +109,38 @@ impl CpuActor {
 
         match request {
             BusRead32(req_type, address) => {
+                let shift = (!address & 0x4) * 8;
                 match bus.c_bus.cpu_read(outbox, address, time) {
-                    ReadCompleted(data) => self.finish_read32(outbox, req_type, data, time, limit),
+                    ReadCompleted(data) => {
+                        let data = (data as u64) << shift;
+                        self.finish_read32(outbox, req_type, data, time, limit)
+                    }
                     WriteCompleted => unreachable!(),
                     Unmapped => todo!("Unmapped"),
                     Dispatched => {
-                        self.req_type = Some(req_type);
+                        self.c_bus_req = Some((shift, req_type));
                         SchedulerResult::Ok
                     }
                 }
             }
-            BusWrite32(_, address, data) => {
-                match bus.c_bus.cpu_write(outbox, address, data, time) {
+            BusWrite32(_, address, data, _mask) => {
+                // cbus discards the mask.
+                // The cpu pipeline has already shifted the data to the correct position within an
+                // aligned 64bit double, but only the critical word is send over the SYSAD bus.
+                // We need to implement that here.
+                let shift = (!address & 0x4) * 8;
+                let word = (data >> shift) as u32;
+                match bus.c_bus.cpu_write(outbox, address, word, time) {
                     WriteCompleted => self.finish_write32(outbox, time, limit),
                     ReadCompleted(_) => unreachable!(),
                     Unmapped => todo!("Unmapped"),
                     Dispatched => SchedulerResult::Ok,
                 }
             }
-            _ => todo!("Wrong request type")
+            _ => {
+                // These probably all cause the CPU to lock-up, as CBUS will only ever acknowledge a word
+                todo!("Wrong request type for CBus, {:}", request)
+            }
         }
     }
 
@@ -158,45 +151,53 @@ impl CpuActor {
 
         match request {
             BusRead32(req_type, addr) => {
-                let (cycles, bytes) = d_bus.read_bytes(addr);
-                self.finish_read32(outbox, req_type, u32::from_be_bytes(bytes), time.add(cycles), limit)
+                let (cycles, data) = d_bus.read_qword(addr & !0x7);
+                self.finish_read32(outbox, req_type, data, time.add(cycles), limit)
             }
             BusRead64(_, addr) => {
-                let (cycles, bytes) = d_bus.read_bytes::<8>(addr);
-                self.finish_read64(outbox, &as_words(bytes), time.add(cycles), limit)
+                let (cycles, data) = d_bus.read_qword(addr & !0x7);
+                self.finish_read64(outbox, data, time.add(cycles), limit)
             }
             BusRead128(_, addr) => {
-                let (cycles, bytes) = d_bus.read_bytes::<16>(addr);
-                self.finish_read128(outbox, &as_words(bytes), time.add(cycles), limit)
+                let _align = addr & 0x7;
+                let addr = addr & !0x7;
+                // TODO: We need to calculate critical word first timings
+                // HWTEST: does MI always wait for both words to be ready?
+                //         I think the SYSAD bus wants all 128bits at once
+                let (cycles1, lower) = d_bus.read_qword(addr);
+                let (cycles2, upper) = d_bus.read_qword(addr.wrapping_add(8));
+                let time = time.add(cycles1 + cycles2);
+                let data = [lower, upper];
+
+                self.finish_read128(outbox, &data, time, limit)
             }
             BusRead256(_, addr) => {
-                let (cycles, bytes) = d_bus.read_bytes::<32>(addr);
-                self.finish_read256(outbox, &as_words(bytes), time.add(cycles), limit)
+                let mut buffer = [0; 4];
+                let mut total_cycles = 0;
+
+                // The VR4300 only does 256bit aligned reads, so critical word first doesn't matter
+                assert!(addr & 0x1f == 0);
+                for i in 0..4 {
+                    let (cycles, data) = d_bus.read_qword(addr & !0x7 + i * 8);
+                    buffer[i as usize] = data;
+                    total_cycles += cycles;
+                }
+                self.finish_read256(outbox, &buffer, time.add(total_cycles), limit)
             }
-            // TODO: These should use masks
-            BusWrite8(_, addr, data) => {
-                let cycles = d_bus.write_bytes(addr, [data as u8]);
+            BusWrite32(_, addr, data, mask) => {
+                let cycles = d_bus.write_qword_masked(addr & !0x7, data, mask);
                 self.finish_write32(outbox, time.add(cycles), limit)
             }
-            BusWrite16(_, addr, data) => {
-                let cycles = d_bus.write_bytes(addr, (data as u16).to_le_bytes());
-                self.finish_write32(outbox, time.add(cycles), limit)
-            }
-            BusWrite24(_, addr, data) => {
-                let data = data.to_le_bytes()[0..3].try_into().unwrap();
-                let cycles = d_bus.write_bytes::<3>(addr, data);
-                self.finish_write32(outbox, time.add(cycles), limit)
-            }
-            BusWrite32(_, addr, data) => {
-                let cycles = d_bus.write_bytes(addr, data.to_le_bytes());
-                self.finish_write32(outbox, time.add(cycles), limit)
-            }
-            BusWrite64(_, addr, data) => {
-                let cycles = d_bus.write_bytes(addr, data.to_le_bytes());
+            BusWrite64(_, addr, data, mask) => {
+                // mask is used for Store Double Left/Store Double Right
+                let cycles = d_bus.write_qword_masked(addr & !0x7, data, mask);
                 self.finish_write64(outbox, time.add(cycles), limit)
             }
             BusWrite128(_, addr, data) => {
-                let cycles = d_bus.write_bytes::<16>(addr, as_bytes(data));
+                // Writes are always 128 bit aligned
+                assert!(addr & 0xf == 0);
+                let mut cycles = d_bus.write_qword(addr, data[0]);
+                cycles += d_bus.write_qword(addr + 8, data[1]);
                 self.finish_write128(outbox, time.add(cycles), limit)
             }
         }
@@ -223,7 +224,7 @@ impl CpuActor {
     /// The generic memory finish function
     /// Don't call this directly, call one of the specialized version instead
     #[inline(always)]
-    fn finish_mem_unspecialised(&mut self, outbox: &mut CpuOutbox, req_type: vr4300::RequestType, data: &[u32], time: Time, limit: Time) -> SchedulerResult {
+    fn finish_mem_unspecialised(&mut self, outbox: &mut CpuOutbox, req_type: vr4300::RequestType, data: &[u64], transfers: usize, time: Time, limit: Time) -> SchedulerResult {
         //println!("CPU: Finishing {:} = {:x?} at {:}", request, mem_finished, time);
 
         //assert!((u64::from(time) - u64::from(self.committed_time)) >= 1, "mem finished too fast");
@@ -237,7 +238,7 @@ impl CpuActor {
             time // No data to transfer back
         } else {
             // It takes length cycles to receive the data across the SysAD bus
-            time.add(data.len() as u64)
+            time.add(transfers as u64)
         };
 
         self.bus_free = finish_time;
@@ -248,9 +249,9 @@ impl CpuActor {
         let catchup_result = self.advance(outbox, CpuRun {  }, finish_time);
 
         if write {
-            self.cpu_core.finish_write(req_type, data.len() as u64);
+            self.cpu_core.finish_write(req_type, transfers);
         } else {
-            let new_req = self.cpu_core.finish_read(req_type, data);
+            let new_req = self.cpu_core.finish_read(req_type, data, transfers);
 
             if let Some(new_req) = new_req {
                 assert!(self.outstanding_mem_request.is_none());
@@ -273,44 +274,43 @@ impl CpuActor {
     }
 
     #[inline(never)]
-    fn finish_read32(&mut self, outbox: &mut CpuOutbox, req_type: vr4300::RequestType, data: u32, time: Time, limit: Time) -> SchedulerResult {
+    fn finish_read32(&mut self, outbox: &mut CpuOutbox, req_type: vr4300::RequestType, data: u64, time: Time, limit: Time) -> SchedulerResult {
         match req_type {
             vr4300::RequestType::UncachedDataRead | vr4300::RequestType::UncachedInstructionRead => {
-                let data = [data];
-                self.finish_mem_unspecialised(outbox, req_type, &data, time, limit)
+                self.finish_mem_unspecialised(outbox, req_type, &[data], 1, time, limit)
             }
             _ => { unreachable!() }
         }
     }
 
     #[inline(never)]
-    fn finish_read64(&mut self, outbox: &mut CpuOutbox, data: &[u32; 2], time: Time, limit: Time) -> SchedulerResult {
-        self.finish_mem_unspecialised(outbox, vr4300::RequestType::UncachedDataRead, data, time, limit)
+    fn finish_read64(&mut self, outbox: &mut CpuOutbox, data: u64, time: Time, limit: Time) -> SchedulerResult {
+        self.finish_mem_unspecialised(outbox, vr4300::RequestType::UncachedDataRead, &[data], 2, time, limit)
     }
 
     #[inline(never)]
-    fn finish_read128(&mut self, outbox: &mut CpuOutbox, data: &[u32; 4], time: Time, limit: Time) -> SchedulerResult {
-        self.finish_mem_unspecialised(outbox, vr4300::RequestType::DCacheFill, data, time, limit)
+    fn finish_read128(&mut self, outbox: &mut CpuOutbox, data: &[u64; 2], time: Time, limit: Time) -> SchedulerResult {
+        self.finish_mem_unspecialised(outbox, vr4300::RequestType::DCacheFill, data, 4, time, limit)
     }
 
     #[inline(never)]
-    fn finish_read256(&mut self, outbox: &mut CpuOutbox, data: &[u32; 8], time: Time, limit: Time) -> SchedulerResult {
-        self.finish_mem_unspecialised(outbox, vr4300::RequestType::ICacheFill, data, time, limit)
+    fn finish_read256(&mut self, outbox: &mut CpuOutbox, data: &[u64; 4], time: Time, limit: Time) -> SchedulerResult {
+        self.finish_mem_unspecialised(outbox, vr4300::RequestType::ICacheFill, data, 8, time, limit)
     }
 
     #[inline(never)]
     fn finish_write32(&mut self, outbox: &mut CpuOutbox, time: Time, limit: Time) -> SchedulerResult {
-        self.finish_mem_unspecialised(outbox, vr4300::RequestType::UncachedWrite, &[0; 1], time, limit)
+        self.finish_mem_unspecialised(outbox, vr4300::RequestType::UncachedWrite, &[0; 0], 1, time, limit)
     }
 
     #[inline(never)]
     fn finish_write64(&mut self, outbox: &mut CpuOutbox, time: Time, limit: Time) -> SchedulerResult {
-        self.finish_mem_unspecialised(outbox, vr4300::RequestType::UncachedWrite, &[0; 2], time, limit)
+        self.finish_mem_unspecialised(outbox, vr4300::RequestType::UncachedWrite, &[0; 0], 2, time, limit)
     }
 
     #[inline(never)]
     fn finish_write128(&mut self, outbox: &mut CpuOutbox, time: Time, limit: Time) -> SchedulerResult {
-        self.finish_mem_unspecialised(outbox, vr4300::RequestType::DCacheWriteback, &[0; 4], time, limit)
+        self.finish_mem_unspecialised(outbox, vr4300::RequestType::DCacheWriteback, &[0; 0], 4, time, limit)
     }
 
 }
@@ -337,7 +337,7 @@ impl ActorInit<N64Actors> for CpuActor {
             cpu_core: Default::default(),
             outstanding_mem_request: None,
             bus: Some(Box::new(BusPair { c_bus: CBus::new(), d_bus: DBus::new() })),
-            req_type: None,
+            c_bus_req: None,
             bus_free: Default::default(),
             recursion: 0,
             interrupted_msg: Default::default(),
@@ -350,13 +350,12 @@ impl Handler<N64Actors, c_bus::ReadFinished> for CpuActor {
     fn recv(&mut self, outbox: &mut CpuOutbox, message: c_bus::ReadFinished, time: Time, limit: Time) -> SchedulerResult {
         self.recursion = 0; // Reset recursion
 
-        // PERF: Should we put outstanding_mem_request inside the ReadFinshed message?
+        // PERF: Should we put c_bus_req inside the ReadFinshed message?
         //       That would save the None check and panic
-        //Self::debug_check_finish_mem(request.request_type(), MemFinished::Read(message.clone()));
 
-        // PERF: We should do separate handlers for each length, save the dispatch
-        let req_type = self.req_type.take().unwrap();
-        self.finish_read32(outbox, req_type, message.data, time, limit)
+        let (shift, req_type) = self.c_bus_req.take().unwrap();
+        let data = (message.data as u64) << shift;
+        self.finish_read32(outbox, req_type, data, time, limit)
     }
 }
 
@@ -412,7 +411,8 @@ impl Handler<N64Actors, c_bus::Resource> for CpuActor {
                 self.finish_write32(outbox, time, limit)
             }
             RegBusResult::ReadCompleted(data) => {
-                let req_type = self.req_type.take().unwrap();
+                let (shift, req_type) = self.c_bus_req.take().unwrap();
+                let data = (data as u64) << shift;
                 self.finish_read32(outbox, req_type, data, time, limit)
             }
             RegBusResult::Dispatched => {

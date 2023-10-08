@@ -1,6 +1,7 @@
 use std::{sync::mpsc::{self, Receiver, SyncSender}, any::Any};
 
 pub mod cli;
+pub mod util;
 
 pub trait EmulationCore: Sync + Send {
     /// The name of the core

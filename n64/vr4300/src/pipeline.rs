@@ -1,3 +1,6 @@
+
+use common::util::ByteMask8;
+
 use super::{
     instructions::{
         InstructionInfo,
@@ -24,7 +27,6 @@ struct RegisterFile {
     temp: u64, // Either result of jump calculation, or value to store
     writeback_reg: u8,
     ex_mode: ExMode,
-    mem_mode: Option<MemMode>,
 }
 
 struct Execute {
@@ -32,8 +34,9 @@ struct Execute {
     alu_out: u64,
     addr: u64,
     skip_next: bool, // Used to skip the op about to be executed in RF stage
-    mem_size: u8, // 0 is no mem access
+    mem_size: u8,
     mem_mode: Option<MemMode>,
+    mem_mask: ByteMask8,
     trap: bool,
     writeback_reg: u8,
 
@@ -41,6 +44,8 @@ struct Execute {
     hilo: [u64; 2],
     ll_bit: bool,
     ll_addr: u64,
+
+    subinstruction_cycle: u32,
 }
 struct DataCache {
     cache_attempt: DataCacheAttempt,
@@ -49,6 +54,7 @@ struct DataCache {
     alu_out: u64,
     mem_mode: Option<MemMode>,
     mem_size: u8,
+    mem_mask: ByteMask8,
 }
 struct WriteBack {
     stalled: bool,
@@ -66,7 +72,11 @@ pub struct Pipeline {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemMode
 {
-    Load,
+    //Load,
+    LoadSignExtend(u8, u8),
+    LoadZeroExtend(u8, u8),
+    LoadMergeWord(u8),
+    LoadMergeDouble(u8),
     Store,
     ConditionalStore,
     ConditionalStoreFail,
@@ -76,17 +86,19 @@ pub enum MemoryReq
 {
     ICacheFill(u32),
     DCacheFill(u32),
-    DCacheReplace(u32, u32, [u32; 4]),
+    DCacheReplace(u32, u32, [u64; 2]),
     UncachedInstructionRead(u32),
-    UncachedDataRead(u32, u8),
-    UncachedDataWrite(u32, u8, u64),
+    UncachedDataReadWord(u32),
+    UncachedDataReadDouble(u32),
+    UncachedDataWriteWord(u32, u64, ByteMask8), // one transfer
+    UncachedDataWriteDouble(u32, u64, ByteMask8), // two transfers
 }
 
 pub enum MemoryResponce
 {
-    ICacheFill([u32; 8]),
-    DCacheFill([u32; 4]),
-    UncachedInstructionRead(u32),
+    ICacheFill([u64; 4]),
+    DCacheFill([u64; 2]),
+    UncachedInstructionRead(u64),
     UncachedDataRead(u64),
     UncachedDataWrite,
 }
@@ -122,8 +134,8 @@ impl Pipeline {
             // Easy case, WB is stalled, so the entire pipeline is blocked
             return true;
         }
-        let wb_has_work = self.dc.mem_size != 0 || self.dc.writeback_reg != 0;
-        let dc_has_work = self.ex.mem_size != 0 || self.ex.writeback_reg != 0;
+        let wb_has_work = self.dc.mem_mode.is_some() || self.dc.writeback_reg != 0;
+        let dc_has_work = self.ex.mem_mode.is_some() || self.ex.writeback_reg != 0;
         let ex_has_work = match self.rf.ex_mode { ExMode::Nop => false, _ => true };
 
         // Otherwise we are blocked if ic is stalled and nothing else has work
@@ -158,35 +170,57 @@ impl Pipeline {
             if let Some(mem_mode) = self.dc.mem_mode {
                 let cache_attempt = self.dc.cache_attempt;
                 let tlb_tag = self.dc.tlb_tag;
-                let mem_size = self.dc.mem_size as usize;
 
                 if cache_attempt.is_hit(tlb_tag) {
                     match mem_mode {
-                        MemMode::Store => cache_attempt.write(dcache, mem_size, value),
-                        MemMode::Load => value = cache_attempt.read(dcache, mem_size),
-                        MemMode::ConditionalStoreFail => value = 0,
+                        MemMode::Store => cache_attempt.write(dcache, value, self.dc.mem_mask),
+                        MemMode::LoadZeroExtend(up, down) => {
+                            value = (cache_attempt.read(dcache) << up) >> down;
+                        }
+                        MemMode::LoadSignExtend(up, down) => {
+                            value = ((cache_attempt.read(dcache) << up) as i64 >> down) as u64;
+                        }
+                        MemMode::LoadMergeWord(align) => {
+                            let new_value = cache_attempt.read(dcache) >> align;
+                            self.dc.mem_mask.masked_insert(&mut value, new_value);
+
+                            value = value as i32 as u64; // sign extend
+                        }
+                        MemMode::LoadMergeDouble(align) => {
+                            let new_value = cache_attempt.read(dcache) >> align;
+                            self.dc.mem_mask.masked_insert(&mut value, new_value);
+                        }
                         MemMode::ConditionalStore => {
-                            cache_attempt.write(dcache, mem_size, value);
+                            cache_attempt.write(dcache, value, self.dc.mem_mask);
                             value = 1;
                         }
+                        MemMode::ConditionalStoreFail => value = 0,
                     }
                 } else {
+                    let mem_size = self.dc.mem_size as usize;
                     self.wb.stalled = true;
                     let do_miss = |is_store| {
-                        cache_attempt.do_miss(&dcache, tlb_tag, mem_size as u8, is_store, value)
+                        cache_attempt.do_miss(&dcache, tlb_tag, mem_size as u8, is_store, value, self.dc.mem_mask)
                     };
                     match mem_mode {
-                        MemMode::Load => { return ExitReason::Mem(do_miss(false)); }
-                        MemMode::Store => { return ExitReason::Mem(do_miss(true)); }
+                        MemMode::LoadSignExtend(_, _) | MemMode::LoadZeroExtend(_, _) |
+                        MemMode::LoadMergeWord(_) |  MemMode::LoadMergeDouble(_) => {
+                            return ExitReason::Mem(do_miss(false));
+                        }
+                        MemMode::Store => {
+                            return ExitReason::Mem(do_miss(true));
+                        }
                         MemMode::ConditionalStore => {
-                            // HWTEST: According to @Lemmy, LL/SC act just like LW/SW
-                            //         Which means we need to write LLBit to RT here for uncached addresses
+                            // According to @Lemmy, LL/SC act just like LW/SW
                             if tlb_tag.is_uncached() {
+                                // PERF: To avoid an extra branch in the uncached store path, do the
+                                //       register write now.
+
                                 self.regs.write(self.dc.writeback_reg, 1);
                             }
                             return ExitReason::Mem(do_miss(true));
                         } MemMode::ConditionalStoreFail => {
-                            // HWTEST: And suggests that SC fails aborts the memory operation or suppresses exceptions
+                            // HWTEST: Which suggests that SC fails aborts the memory operation or suppresses exceptions
                             self.regs.write(self.dc.writeback_reg, 0);
                         }
                     };
@@ -207,15 +241,12 @@ impl Pipeline {
             self.dc.mem_mode = None;
             self.dc.writeback_reg = 0;
 
-            if let Some(_mem_mode) = self.ex.mem_mode {
+            if let Some(_) = self.ex.mem_mode {
                 let addr = self.ex.addr;
 
                 self.dc.cache_attempt = dcache.open(addr);
                 // TODO: Implement TLB lookups
                 self.dc.tlb_tag = CacheTag::new_uncached((addr as u32) & 0x1fff_ffff);
-            }
-            if self.ex.mem_mode.is_some() {
-                assert!(self.ex.mem_size != 0);
             }
 
             if self.ex.mem_mode.is_some() || self.ex.writeback_reg != 0 {
@@ -224,6 +255,7 @@ impl Pipeline {
                 self.dc.writeback_reg = self.ex.writeback_reg;
                 self.dc.mem_mode = self.ex.mem_mode;
                 self.dc.mem_size = self.ex.mem_size;
+                self.dc.mem_mask = self.ex.mem_mask;
                 writeback_has_work = true;
             }
         }
@@ -238,7 +270,9 @@ impl Pipeline {
             // PERF: we might be able to move this skip logic into the jump table
             if self.ex.skip_next {
                 match self.rf.ex_mode {
-                    ExMode::Nop => {}
+                    ExMode::Nop => {
+                        // FIXME: This is going to break when there is a nop instruction in the branch delay slot
+                    }
                     _ => {
                         // For some reason... branch likely instructions invalidate the branch-delay
                         // slot's instruction if they aren't taken... Which is backwards
@@ -250,7 +284,10 @@ impl Pipeline {
             } else {
                 Self::run_ex_phase1(&self.rf, &mut self.ex);
 
-                // TODO: return here if ex needs multiple cycles?
+                if self.ex.subinstruction_cycle != 0 {
+                    // The pipeline is stalled, executing a multi-cycle instruction
+                    return ExitReason::Ok;
+                }
             }
         }
 
@@ -341,7 +378,12 @@ impl Pipeline {
 
         if let InstructionInfo::Op(_, _, _, rf_mode, ex_mode) = *inst_info {
             rf.ex_mode = ex_mode;
-            rf.mem_mode = None;
+            // The register read always happens
+            // Especially the bypass logic, which might trigger a load dependency even if
+            // the instruction doesn't use the value.
+            let rs_val = regfile.read(i.rs());
+            let rt_val = regfile.read(i.rt());
+
             //println!("RF: {:?}", rf_mode);
             match rf_mode {
                 // PERF: This could be simplified down to just a few flags
@@ -357,75 +399,73 @@ impl Pipeline {
                     rf.writeback_reg = 31;
                 }
                 RfMode::JumpReg => {
-                    rf.temp = regfile.read(r.rs());
+                    rf.temp = rs_val;
                     rf.writeback_reg = 0;
                 }
                 RfMode::JumpRegLink => {
-                    rf.temp = regfile.read(r.rs());
+                    rf.temp = rs_val;
                     rf.writeback_reg = r.rd();
                 }
                 RfMode::BranchImm1 => {
-                    rf.alu_a = regfile.read(i.rs());
+                    rf.alu_a = rs_val;
                     rf.alu_b = 0;
                     let offset = (i.imm() as i16 as u64) << 2;
                     rf.temp = rf.next_pc + offset;
                     rf.writeback_reg = 0;
                 }
                 RfMode::BranchImm2 => {
-                    rf.alu_a = regfile.read(i.rs());
-                    rf.alu_b = regfile.read(i.rt());
+                    rf.alu_a = rs_val;
+                    rf.alu_b = rt_val;
                     let offset = (i.imm() as i16 as u64) << 2;
                     rf.temp = rf.next_pc.wrapping_add(offset);
                     rf.writeback_reg = 0;
                 }
                 RfMode::BranchLinkImm => {
-                    rf.alu_a = regfile.read(i.rs());
+                    rf.alu_a = rs_val;
                     rf.alu_b = 0;
                     let offset = (i.imm() as i16 as u64) << 2;
                     rf.temp = rf.next_pc.wrapping_add(offset);
                     rf.writeback_reg = 31;
                 }
                 RfMode::ImmSigned => {
-                    rf.alu_a = regfile.read(i.rs());
+                    rf.alu_a = rs_val;
                     rf.alu_b = i.imm() as i16 as u64;
                     rf.writeback_reg = i.rt();
-                    rf.mem_mode = Some(MemMode::Load);
                 }
                 RfMode::ImmUnsigned => {
-                    rf.alu_a = regfile.read(i.rs());
+                    rf.alu_a = rs_val;
                     rf.alu_b = i.imm() as u64;
                     rf.writeback_reg = i.rt();
                 }
-                RfMode::StoreOp => {
-                    rf.alu_a = regfile.read(i.rs());
-                    rf.alu_b = i.imm() as i16 as u64;
-                    rf.writeback_reg = 0;
-                    rf.temp = regfile.read(i.rt());
-                    rf.mem_mode = Some(MemMode::Store);
+                RfMode::Mem => {
+                    rf.alu_a = rs_val;
+                    rf.alu_b = rt_val;
+                    rf.temp = i.imm() as i16 as u64;
+                    rf.writeback_reg = i.rt();
                 }
                 RfMode::RegReg => {
-                    rf.alu_a = regfile.read(r.rs());
-                    rf.alu_b = regfile.read(r.rt());
+                    rf.alu_a = rs_val;
+                    rf.alu_b = rt_val;
                     rf.writeback_reg = r.rd();
                 }
                 RfMode::RegRegNoWrite => {
-                    rf.alu_a = regfile.read(r.rs());
-                    rf.alu_b = regfile.read(r.rt());
+                    rf.alu_a = rs_val;
+                    rf.alu_b = rt_val;
                     rf.writeback_reg = 0;
                 }
                 RfMode::SmallImm => {
                     rf.alu_a = r.rs() as u64;
-                    rf.alu_b = regfile.read(r.rt());
+                    rf.alu_b = rt_val;
                     rf.writeback_reg = r.rd();
                 }
                 RfMode::SmallImmOffset32 => {
                     rf.alu_a = r.rs() as u64 + 32;
-                    rf.alu_b = regfile.read(r.rt());
+                    rf.alu_b = rt_val;
                     rf.writeback_reg = r.rd();
                 }
                 RfMode::SmallImmNoWrite => {
                     rf.alu_a = r.rs() as u64;
-                    rf.alu_b = regfile.read(r.rt());
+                    rf.alu_b = rt_val;
                     rf.writeback_reg = 0;
                 }
                 RfMode::RfUnimplemented => {
@@ -654,33 +694,124 @@ impl Pipeline {
                     ex.hilo = [hi, lo];
                 }
             }
-            ExMode::Mem(size) => {
-                ex.addr = rf.alu_a.wrapping_add(rf.alu_b);
-                ex.alu_out = rf.temp;
-                ex.mem_size = size;
-                ex.mem_mode = rf.mem_mode;
+            ExMode::Load(size) => {
+                ex.addr = rf.alu_a.wrapping_add(rf.temp);
+                let align = (ex.addr & 0x7) as u8;
+                if align & (size - 1) == 0 {
+                    ex.mem_mode = Some(MemMode::LoadSignExtend(8 * align, 8 * (8 - size)));
+                    ex.mem_size = size;
+                } else {
+                    todo!("Misalignment exception, addr={:x}, size={}", ex.addr, size);
+                }
             }
-            ExMode::MemUnsigned(size) => {
-                ex.addr = rf.alu_a.wrapping_add(rf.alu_b);
-                ex.alu_out = rf.temp;
-                ex.mem_size = size;
-                ex.mem_mode = rf.mem_mode;
+            ExMode::LoadUnsigned(size) => {
+                ex.addr = rf.alu_a.wrapping_add(rf.temp);
+                let align = (ex.addr & 0x7) as u8;
+                if align & (size - 1) == 0 {
+                    ex.mem_mode = Some(MemMode::LoadZeroExtend(8 * align, 8 * (8 - size)));
+                    ex.mem_size = size;
+                } else {
+                    todo!("Misalignment exception");
+                }
             }
-            ExMode::MemLeft(_) => todo!(),
-            ExMode::MemRight(_) => todo!(),
+            ExMode::LoadLeft(size) => {
+                ex.addr = rf.alu_a.wrapping_add(rf.temp);
+                let align = (ex.addr & 0x7) as u8;
+                if size == 4 {
+                    // LoadMergeWord actually applies the mask after word-aligning, so we are only
+                    // using the lower half of this mask
+                    ex.mem_mask = ByteMask8::new(4 - (align & 0x3), align & 0x3);
+                    ex.mem_mode = Some(MemMode::LoadMergeWord(align));
+                } else {
+                    ex.mem_mask = ByteMask8::new(8 - align, align);
+                    ex.mem_mode = Some(MemMode::LoadMergeDouble(align));
+                }
+                ex.mem_size = size;
+            }
+            ExMode::LoadRight(size) => {
+                ex.addr = rf.alu_a.wrapping_add(rf.temp);
+                ex.alu_out = rf.alu_b;
+                let align = (ex.addr & 0x7) as u8;
+                if size == 4 {
+                    // LoadMergeWord actually applies the mask after word-aligning, so we are only
+                    // using the lower half of this mask
+                    ex.mem_mask = ByteMask8::new(4 - (4 - (align & 0x3)), 0u32);
+                    ex.mem_mode = Some(MemMode::LoadMergeWord(align));
+                } else {
+                    ex.mem_mask = ByteMask8::new(8 - (8 - align), 0u32);
+                    ex.mem_mode = Some(MemMode::LoadMergeDouble(align));
+                }
+                ex.mem_size = size;
+            }
+            ExMode::Store(size) => {
+                ex.addr = rf.alu_a.wrapping_add(rf.temp);
+                ex.writeback_reg = 0;
+                let align = (ex.addr & 0x7) as u8;
+                if align & (size - 1) == 0 {
+                    ex.mem_mode = Some(MemMode::Store);
+                    ex.mem_size = size;
+                    ex.mem_mask = ByteMask8::new(size, align);
+                    assert!(ex.mem_mask.size() == size as u32 * 8);
+                    ex.alu_out = rf.alu_b.wrapping_shl(8 * (8 - (size + align)) as u32);
+                } else {
+                    todo!("Misalignment exception");
+                }
+            }
+            ExMode::StoreLeft(size) => {
+                ex.addr = rf.alu_a.wrapping_add(rf.temp);
+                ex.writeback_reg = 0;
+                let align = (ex.addr & 0x7) as u32;
+                ex.mem_mode = Some(MemMode::Store);
+                ex.mem_size = size;
+                ex.alu_out = rf.alu_b.wrapping_shl(8 * align);
+                if size == 4 {
+                    ex.mem_mask = ByteMask8::new(4 - (align & 0x3), align & 0x3);
+
+                } else {
+                    ex.mem_mask = ByteMask8::new(8 - align, align);
+                }
+            }
+            ExMode::StoreRight(size) => {
+                ex.addr = rf.alu_a.wrapping_add(rf.temp);
+                ex.writeback_reg = 0;
+                let align = (ex.addr & 0x7) as u32;
+                ex.mem_mode = Some(MemMode::Store);
+                ex.mem_size = size;
+                ex.alu_out = rf.alu_b.wrapping_shl(8 * (align & 0x4));
+                if size == 4 {
+                    ex.mem_mask = ByteMask8::new(4 - (4 - (align & 0x3)), align & 0x4);
+                } else {
+                    ex.mem_mask = ByteMask8::new(8 - (8 - align), 0u32);
+                }
+            }
             ExMode::MemLoadLinked(size) => {
-                ex.addr = rf.alu_a.wrapping_add(rf.alu_b);
-                ex.alu_out = rf.temp;
-                ex.mem_size = size;
+                ex.addr = rf.alu_a.wrapping_add(rf.temp);
+                let align = (ex.addr & 0x7) as u8;
+                if align & (size - 1) == 0 {
+                    ex.mem_mode = Some(MemMode::LoadSignExtend(8 * align, 8 * (8 - size)));
+                    ex.mem_size = size;
+                } else {
+                    todo!("Misalignment exception");
+                }
+
                 ex.ll_bit = true;
                 ex.ll_addr = ex.addr;
-                ex.mem_mode = Some(MemMode::Load);
             }
             ExMode::MemStoreConditional(size) => {
-                ex.addr = rf.alu_a.wrapping_add(rf.alu_b);
-                ex.alu_out = rf.temp;
-                ex.mem_size = size;
-                ex.mem_mode = Some(if ex.ll_bit { MemMode::ConditionalStore } else { MemMode::ConditionalStoreFail });
+                ex.addr = rf.alu_a.wrapping_add(rf.temp);
+                let align = (ex.addr & 0x7) as u32;
+                if align & (size as u32 - 1) == 0 {
+                    ex.mem_mode = if ex.ll_bit {
+                        Some(MemMode::ConditionalStore)
+                    } else {
+                        Some(MemMode::ConditionalStoreFail)
+                    };
+                    ex.mem_size = size;
+                    ex.mem_mask = ByteMask8::new(size, align);
+                    ex.alu_out = rf.alu_b.wrapping_shl(8 * (8 - align));
+                } else {
+                    todo!("Misalignment exception");
+                }
             }
             ExMode::LoadInternal(reg) => {
                 // HWTEST: The VR manual says accessing these registers more than two cycles before
@@ -723,41 +854,66 @@ impl Pipeline {
     }
 
     #[inline(always)]
-    pub fn memory_responce(&mut self, info: MemoryResponce, icache: &mut ICache,
+    pub fn memory_responce(&mut self, info: MemoryResponce, transfers: usize, icache: &mut ICache,
         dcache: &mut DCache) {
         match info {
             MemoryResponce::ICacheFill(data) => {
+                assert!(transfers == 8, "Bus state machine stalled");
+
                 // Reconstruct line/offset from program counter
                 let line = (self.pc() as usize >> 5) & 0x1ff;
-                let offset = (self.pc() as usize) & 0x1f;
                 let new_tag = self.ic.expected_tag;
 
                 icache.finish_fill(line, new_tag, data);
 
-                self.ic.cache_data = data[offset];
+                self.ic.cache_data = icache.fetch(self.pc()).0;
                 self.ic.cache_tag = new_tag;
                 self.ic.stalled = false;
             }
-            MemoryResponce::UncachedInstructionRead(word) => {
-                self.ic.cache_data = word;
+            MemoryResponce::UncachedInstructionRead(data) => {
+                let shift = 8 * (!self.pc() & 0x4);
+                self.ic.cache_data = (data >> shift) as u32;
                 self.ic.cache_tag = self.ic.expected_tag;
                 self.ic.stalled = false;
                 self.rf.ex_mode = ExMode::Nop;
             }
             MemoryResponce::DCacheFill(data) => {
+                assert!(transfers == 4, "Bus state machine stalled");
+                // TODO: critical word first timings
                 self.dc.cache_attempt.finish_fill(dcache, self.dc.tlb_tag, data);
                 self.wb.stalled = false;
             }
             MemoryResponce::UncachedDataRead(value) => {
-                if self.dc.writeback_reg != 0 {
-                    self.regs.write(self.dc.writeback_reg, value);
-                    self.dc.writeback_reg = 0;
+                assert!(transfers == self.dc.mem_size as usize / 4 , "Bus state machine stalled");
+                let value = match self.dc.mem_mode {
+                    Some(MemMode::LoadSignExtend(up, down)) => {
+                        (value.wrapping_shl(up as u32) as i64 >> down) as u64
+                    }
+                    Some(MemMode::LoadZeroExtend(up, down)) => {
+                        value.wrapping_shl(up as u32) >> down
+                    }
+                    Some(MemMode::LoadMergeWord(align)) => {
+                        let mut temp = self.dc.alu_out;
+                        self.dc.mem_mask.masked_insert(&mut temp, value >> align);
 
-                }
+                        temp as i32 as u64 // sign extend
+                    }
+                    Some(MemMode::LoadMergeDouble(align)) => {
+                        let mut temp = self.dc.alu_out;
+                        self.dc.mem_mask.masked_insert(&mut temp, value >> align);
+
+                        temp
+                    }
+                    _ => unreachable!()
+                };
+
+                self.regs.write(self.dc.writeback_reg, value);
+                self.dc.writeback_reg = 0;
                 self.dc.mem_mode = None;
                 self.wb.stalled = false;
             }
             MemoryResponce::UncachedDataWrite => {
+                assert!(transfers == self.dc.mem_size as usize / 4 , "Bus state machine stalled");
                 self.dc.mem_mode = None;
                 self.wb.stalled = false;
             }
@@ -785,7 +941,6 @@ pub fn create() -> Pipeline {
             temp: 0,
             writeback_reg: 0,
             ex_mode: ExMode::Nop,
-            mem_mode: None,
         },
         ex: Execute{
             next_pc: reset_pc,
@@ -794,8 +949,10 @@ pub fn create() -> Pipeline {
             skip_next: false,
             mem_size: 0,
             mem_mode: None,
+            mem_mask: Default::default(),
             trap: false,
             writeback_reg: 0,
+            subinstruction_cycle: 0,
             hilo: [0, 0],
             ll_bit: false,
             ll_addr: 0,
@@ -807,6 +964,7 @@ pub fn create() -> Pipeline {
             alu_out: 0,
             mem_mode: None,
             mem_size: 0,
+            mem_mask: Default::default(),
         },
         wb: WriteBack{
             stalled: false,

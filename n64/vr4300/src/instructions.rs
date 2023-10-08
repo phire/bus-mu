@@ -197,7 +197,7 @@ impl Instruction {
                     args.push(format!("{:#x}", target));
                 }
                 // These don't have any arguments
-                ExceptionType(_) | MoveFrom(_) => {}
+                ZeroArg(_) | MoveFrom(_) => {}
             }
 
             // handle basic immediate formats
@@ -289,7 +289,7 @@ pub enum Form {
     MulDiv(u8),
     RegRegReg(u8),
     TrapRegReg(u8),
-    ExceptionType(u8),
+    ZeroArg(u8),
 
     // Coprocessor
     CopReg,
@@ -352,7 +352,7 @@ impl Form {
                 Instruction::I(inst.into())
             },
             JReg(_) | JRegLink(_) | ShiftImm(_) | ShiftReg(_) | MoveFrom(_) | MoveTo(_)
-            | MulDiv(_) | RegRegReg(_) | TrapRegReg(_) | ExceptionType(_) | CopReg => {
+            | MulDiv(_) | RegRegReg(_) | TrapRegReg(_) | ZeroArg(_) | CopReg => {
                 Instruction::R(inst)
             }
         }
@@ -403,7 +403,7 @@ pub enum RfMode {
     BranchLinkImm,
     ImmSigned,
     ImmUnsigned,
-    StoreOp,
+    Mem,
     RegReg,
     RegRegNoWrite,
     SmallImm,
@@ -447,11 +447,14 @@ pub enum ExMode {
     MulU64,
     Div64,
     DivU64,
-    Mem(u8),
-    MemUnsigned(u8),
-    MemLeft(u8),
-    MemRight(u8),
+    Load(u8),
+    LoadUnsigned(u8),
+    LoadLeft(u8),
+    LoadRight(u8),
     MemLoadLinked(u8),
+    Store(u8),
+    StoreLeft(u8),
+    StoreRight(u8),
     MemStoreConditional(u8),
     LoadInternal(InternalReg),
     StoreInternal(InternalReg),
@@ -517,48 +520,48 @@ const fn build_primary_table() -> [InstructionInfo; 64] {
         // 3
         Op("DADDI", 0x18, Form::RegImm(true), ImmSigned, Add64),
         Op("DADDIU", 0x19, Form::RegImm(true), ImmSigned, AddU64),
-        Op("LDL", 0x1a, Form::LoadBaseImm, ImmSigned, MemLeft(8)),
-        Op("LDR", 0x1b, Form::LoadBaseImm, ImmSigned, MemRight(8)),
+        Op("LDL", 0x1a, Form::LoadBaseImm, Mem, LoadLeft(8)),
+        Op("LDR", 0x1b, Form::LoadBaseImm, Mem, LoadRight(8)),
         Reserved,
         Reserved,
         Reserved,
         Reserved,
         // 4
-        Op("LB", 0x20, Form::LoadBaseImm, ImmSigned, Mem(1)),
-        Op("LH", 0x21, Form::LoadBaseImm, ImmSigned, Mem(2)),
-        Op("LWL", 0x22, Form::LoadBaseImm, ImmSigned, MemLeft(4)),
-        Op("LW", 0x23, Form::LoadBaseImm, ImmSigned, Mem(4)),
-        Op("LBU", 0x24, Form::LoadBaseImm, ImmSigned, MemUnsigned(1)),
-        Op("LHU", 0x25, Form::LoadBaseImm, ImmSigned, MemUnsigned(2)),
-        Op("LWR", 0x26, Form::LoadBaseImm, ImmSigned, MemRight(4)),
-        Op("LWU", 0x27, Form::LoadBaseImm, ImmSigned, MemUnsigned(4)),
+        Op("LB", 0x20, Form::LoadBaseImm, Mem, Load(1)),
+        Op("LH", 0x21, Form::LoadBaseImm, Mem, Load(2)),
+        Op("LWL", 0x22, Form::LoadBaseImm, Mem, LoadLeft(4)),
+        Op("LW", 0x23, Form::LoadBaseImm, Mem, Load(4)),
+        Op("LBU", 0x24, Form::LoadBaseImm, Mem, LoadUnsigned(1)),
+        Op("LHU", 0x25, Form::LoadBaseImm, Mem, LoadUnsigned(2)),
+        Op("LWR", 0x26, Form::LoadBaseImm, Mem, LoadRight(4)),
+        Op("LWU", 0x27, Form::LoadBaseImm, Mem, LoadUnsigned(4)),
         // 5
-        Op("SB", 0x28, Form::StoreBaseImm, StoreOp, Mem(1)),
-        Op("SH", 0x29, Form::StoreBaseImm, StoreOp, Mem(2)),
-        Op("SWL", 0x2a, Form::StoreBaseImm, StoreOp, MemLeft(4)),
-        Op("SW", 0x2b, Form::StoreBaseImm, StoreOp, Mem(4)),
-        Op("SDL", 0x2c, Form::StoreBaseImm, StoreOp, MemLeft(8)),
-        Op("SDR", 0x2d, Form::StoreBaseImm, StoreOp, MemRight(8)),
-        Op("SWR", 0x2e, Form::StoreBaseImm, StoreOp, MemRight(4)),
-        Op("CACHE", 0x2f, Form::Cache, ImmSigned, CacheOp),
+        Op("SB", 0x28, Form::StoreBaseImm, Mem, Store(1)),
+        Op("SH", 0x29, Form::StoreBaseImm, Mem, Store(2)),
+        Op("SWL", 0x2a, Form::StoreBaseImm, Mem, StoreLeft(4)),
+        Op("SW", 0x2b, Form::StoreBaseImm, Mem, Store(4)),
+        Op("SDL", 0x2c, Form::StoreBaseImm, Mem, StoreLeft(8)),
+        Op("SDR", 0x2d, Form::StoreBaseImm, Mem, StoreRight(8)),
+        Op("SWR", 0x2e, Form::StoreBaseImm, Mem, StoreRight(4)),
+        Op("CACHE", 0x2f, Form::Cache, Mem, CacheOp),
         // 6
-        Op("LL", 0x30, Form::LoadBaseImm, ImmSigned, MemLoadLinked(4)),
+        Op("LL", 0x30, Form::LoadBaseImm, Mem, MemLoadLinked(4)),
         Unimplemented("LWC1", 0x31),// Form::LoadFpuBaseImm, 0),
         Unimplemented("COP2", 0x32),
         Reserved,
-        Op("LLD", 0x34, Form::LoadBaseImm, ImmSigned, MemLoadLinked(8)),
+        Op("LLD", 0x34, Form::LoadBaseImm, Mem, MemLoadLinked(8)),
         Unimplemented("LDC1", 0x35), // Form::LoadFpuBaseImm, 0),
         Unimplemented("COP2", 0x32),
-        Op("LD", 0x37, Form::LoadBaseImm, ImmSigned, Mem(8)),
+        Op("LD", 0x37, Form::LoadBaseImm, Mem, Load(8)),
         // 7
-        Op("SC", 0x38, Form::StoreBaseImm, ImmSigned, MemStoreConditional(4)),
+        Op("SC", 0x38, Form::StoreBaseImm, Mem, MemStoreConditional(4)),
         Unimplemented("SWC1", 0x39), //Form::StoreFpuBaseImm, 0),
         Unimplemented("COP2", 0x3a),
         Reserved,
-        Op("SCD", 0x3c, Form::StoreBaseImm, ImmSigned, MemStoreConditional(8)),
+        Op("SCD", 0x3c, Form::StoreBaseImm, Mem, MemStoreConditional(8)),
         Unimplemented("SDC1", 0x3d), //Form::StoreBaseImm, 0),
         Unimplemented("COP2", 0x3e),
-        Op("SD", 0x3f, Form::StoreBaseImm, StoreOp, Mem(8)),
+        Op("SD", 0x3f, Form::StoreBaseImm, Mem, Load(8)),
     ]
 }
 
@@ -582,10 +585,12 @@ const fn build_special_table() -> [InstructionInfo; 64] {
         Op("JALR", 0, Form::JRegLink(0x9), JumpRegLink, Jump),
         Reserved,
         Reserved,
-        Unimplemented("SYSCALL", 0), // Form::ExceptionType(0xc), 0),
-        Unimplemented("BREAK", 0), // Form::ExceptionType(0xd), 0),
+        Unimplemented("SYSCALL", 0), // Form::ZeroArg(0xc), RegRegNoWrite, ?),
+        Unimplemented("BREAK", 0), // Form::ZeroArg(0xd), RegRegNoWrite, ?),
         Reserved,
-        Unimplemented("SYNC", 0), // Form::ExceptionType(0xf), 0),
+        // HWTEST: Sync is documented as a NOP on the r4300, but does that mean it takes 1 cycle?
+        //         Also, does it cause a false hazard?
+        Op("SYNC", 0, Form::ZeroArg(0xf), RegRegNoWrite, Nop),
         // 2
         // HWTEST: I'm not sure what should happen in RfMode for MFHI/MFLO. Almost every other i
         //         instruction does at least one register load (causing a false hazard, which is visible)

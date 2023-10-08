@@ -4,6 +4,7 @@ use std::any::TypeId;
 
 use actor_framework::*;
 use anyhow::Context;
+use common::util::ByteMask8;
 use crate::{c_bus::{CBusWrite, CBusRead, ReadFinished, WriteFinished}, d_bus::DBus, N64Config};
 
 use super::{N64Actors, cpu_actor::CpuActor, bus_actor::{BusPair, request_bus, ReturnBus, BusRequest, BusActor}};
@@ -353,7 +354,7 @@ impl PiActor {
 
     fn do_write(&mut self, d_bus: &mut DBus) -> u64 {
 
-        let mut mask = !0u64;
+        let mut mask = ByteMask8::default();
         let mut src_addr = self.cart_addr;
 
         let domain = self.domain(src_addr);
@@ -366,7 +367,7 @@ impl PiActor {
         let misalignment = dram_addr & 0x7;
         let aligned_bytes = if misalignment != 0 {
             // First transfer is misaligned in dram and needs a mask
-            mask = !0u64 >> (misalignment * 8);
+            mask = ByteMask8::new(8 - misalignment, misalignment);
             dram_addr -= misalignment;
             src_addr -= misalignment;
             bytes + misalignment
@@ -382,10 +383,12 @@ impl PiActor {
 
         while remaining_bytes >= 8 {
             let data = self.read_dword(src_addr - 0x1000_0000);
-            if mask != !0u64 {
+            if mask.value() != !0u64 {
+                //println!("pi dma write {:#010x} = {:#018x} & {:#018x}", dram_addr, data, mask.value());
                 d_bus.write_qword_masked(dram_addr, data, mask);
-                mask = !0u64;
+                mask = ByteMask8::default();
             } else {
+
                 d_bus.write_qword(dram_addr, data);
             }
 
@@ -397,8 +400,8 @@ impl PiActor {
         if remaining_bytes != 0 {
             let data = self.read_dword(src_addr - 0x1000_0000);
             // Last transfer is less than 8 bytes and needs a mask
-            mask &= !0u64 << ((8 - remaining_bytes) * 8);
-
+            mask = mask & ByteMask8::new(remaining_bytes, 0u32);
+            //println!("pi dma write {:#010x} = {:#018x} & {:#018x}", dram_addr, data, mask.value());
             d_bus.write_qword_masked(dram_addr, data, mask);
             dram_addr += remaining_bytes;
             src_addr += remaining_bytes;

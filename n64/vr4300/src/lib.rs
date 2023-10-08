@@ -8,6 +8,7 @@ use cache::{ICache, DCache};
 use microtlb::ITlb;
 use pipeline::{MemoryReq, ExitReason};
 use pipeline::Pipeline;
+use common::util::ByteMask8;
 
 use self::pipeline::MemoryResponce;
 
@@ -38,7 +39,7 @@ pub struct Core {
     dcache: DCache,
     itlb: ITlb,
     //bus: SysADBus,
-    queued_flush: Option<(u32, [u32; 4])>,
+    queued_flush: Option<(u32, [u64; 2])>,
     count: u64,
 }
 
@@ -60,6 +61,7 @@ impl Core {
                 &mut self.dcache,
                 &mut self.itlb,
             );
+            // TODO: implement flush buffers
             let reason = Reason::BusRequest(match reason {
                 ExitReason::Ok => { continue; }
                 ExitReason::Blocked => {
@@ -83,24 +85,18 @@ impl Core {
                     //println!("Uncached instruction read: {:08x}", addr);
                     BusRequest::BusRead32(RequestType::UncachedInstructionRead, addr)
                 }
-                ExitReason::Mem(MemoryReq::UncachedDataRead(addr, size)) => {
-                    //println!("Uncached data read: {:08x} ({} bytes)", addr, size);
-                    match size {
-                        1 | 2 | 4 => BusRequest::BusRead32(RequestType::UncachedDataRead, addr),
-                        8 => BusRequest::BusRead64(RequestType::UncachedDataRead, addr),
-                        _ => unreachable!(),
-                    }
-                }
-                ExitReason::Mem(MemoryReq::UncachedDataWrite(addr, size, data)) => {
-                    //println!("Uncached data write: {:08x} ({} bytes) = {:08x}", addr, size, data);
-                    match size {
-                        1 => BusRequest::BusWrite8(RequestType::UncachedWrite, addr, data as u32),
-                        2 => BusRequest::BusWrite16(RequestType::UncachedWrite, addr, data as u32),
-                        4 => BusRequest::BusWrite32(RequestType::UncachedWrite, addr, data as u32),
-                        8 => BusRequest::BusWrite64(RequestType::UncachedWrite, addr, data),
-                        _ => unreachable!(),
-                    }
-                }
+                ExitReason::Mem(MemoryReq::UncachedDataReadWord(addr)) => {
+                    BusRequest::BusRead32(RequestType::UncachedDataRead, addr)
+                },
+                ExitReason::Mem(MemoryReq::UncachedDataReadDouble(addr)) => {
+                    BusRequest::BusRead64(RequestType::UncachedDataRead, addr)
+                },
+                ExitReason::Mem(MemoryReq::UncachedDataWriteWord(addr, data, mask)) => {
+                    BusRequest::BusWrite32(RequestType::UncachedWrite, addr, data, mask)
+                },
+                ExitReason::Mem(MemoryReq::UncachedDataWriteDouble(addr, data, mask)) => {
+                    BusRequest::BusWrite64(RequestType::UncachedWrite, addr, data, mask)
+                },
             });
 
             return CoreRunResult {
@@ -120,16 +116,16 @@ impl Core {
     }
 
     #[inline(always)]
-    pub fn finish_read(&mut self, request_type: RequestType, data: &[u32]) -> Option<BusRequest> {
+    pub fn finish_read(&mut self, request_type: RequestType, data: &[u64], transfers: usize) -> Option<BusRequest> {
         let mut mem_req = None;
         let response = match request_type {
             RequestType::UncachedInstructionRead => {
-                let word = data[0];
-                //let (inst, _inst_info) = instructions::decode(word);
-                //let addr = self.pipeline.pc();
-                //println!("(uncached) {:04x}: {:08x}    {}", addr, word, inst.disassemble(addr as u64));
+                // let addr = self.pipeline.pc();
+                // let word = (data[0] >> (8 * (!addr & 4))) as u32;
+                // let (inst, _inst_info) = instructions::decode(word);
+                // println!("(uncached) {:04x}: {:08x}    {}", addr, word, inst.disassemble(addr as u64));
                 self.count += 1;
-                MemoryResponce::UncachedInstructionRead(word)
+                MemoryResponce::UncachedInstructionRead(data[0])
             }
             RequestType::DCacheFill => {
                 mem_req = self.queued_flush.take().map(|(addr, data)| {
@@ -139,16 +135,7 @@ impl Core {
                 MemoryResponce::DCacheFill(data.try_into().unwrap())
             }
             RequestType::UncachedDataRead => {
-                match data.len() {
-                    1 => {
-                        // Sign-extend
-                        MemoryResponce::UncachedDataRead(data[0] as i32 as u64)
-                    }
-                    2 => {
-                        MemoryResponce::UncachedDataRead((data[0] as u64) << 32 | (data[1] as u64))
-                    }
-                    _ => unreachable!(),
-                }
+                MemoryResponce::UncachedDataRead(data[0])
             }
             RequestType::ICacheFill => {
                 MemoryResponce::ICacheFill(data.try_into().unwrap())
@@ -158,6 +145,7 @@ impl Core {
 
         self.pipeline.memory_responce(
             response,
+            transfers,
             &mut self.icache,
             &mut self.dcache,
         );
@@ -166,7 +154,7 @@ impl Core {
     }
 
     #[inline(always)]
-    pub fn finish_write(&mut self, request_type: RequestType, _length: u64) {
+    pub fn finish_write(&mut self, request_type: RequestType, words: usize) {
         let response = match request_type {
             RequestType::UncachedWrite => {
                 MemoryResponce::UncachedDataWrite
@@ -175,6 +163,7 @@ impl Core {
         };
         self.pipeline.memory_responce(
             response,
+            words,
             &mut self.icache,
             &mut self.dcache,
         )
@@ -214,12 +203,9 @@ pub enum BusRequest {
     BusRead64(RequestType, u32),
     BusRead128(RequestType, u32),
     BusRead256(RequestType, u32),
-    BusWrite8(RequestType, u32, u32),
-    BusWrite16(RequestType, u32, u32),
-    BusWrite24(RequestType, u32, u32),
-    BusWrite32(RequestType, u32, u32),
-    BusWrite64(RequestType, u32, u64),
-    BusWrite128(RequestType, u32, [u32; 4]),
+    BusWrite32(RequestType, u32, u64, ByteMask8),
+    BusWrite64(RequestType, u32, u64, ByteMask8),
+    BusWrite128(RequestType, u32, [u64; 2]),
 }
 
 impl BusRequest {
@@ -230,11 +216,8 @@ impl BusRequest {
             BusRequest::BusRead64(_, addr) => { *addr }
             BusRequest::BusRead128(_, addr) => { *addr }
             BusRequest::BusRead256(_, addr) => { *addr }
-            BusRequest::BusWrite8(_, addr, _) => { *addr }
-            BusRequest::BusWrite16(_, addr, _) => { *addr }
-            BusRequest::BusWrite24(_, addr, _) => { *addr }
-            BusRequest::BusWrite32(_, addr, _) => { *addr }
-            BusRequest::BusWrite64(_, addr, _) => { *addr }
+            BusRequest::BusWrite32(_, addr, _, _) => { *addr }
+            BusRequest::BusWrite64(_, addr, _, _) => { *addr }
             BusRequest::BusWrite128(_, addr, _) => { *addr }
         }
     }
@@ -246,29 +229,12 @@ impl BusRequest {
             BusRequest::BusRead64(request_type, _) => { *request_type }
             BusRequest::BusRead128(request_type, _) => { *request_type }
             BusRequest::BusRead256(request_type, _) => { *request_type }
-            BusRequest::BusWrite8(request_type, _, _) => { *request_type }
-            BusRequest::BusWrite16(request_type, _, _) => { *request_type }
-            BusRequest::BusWrite24(request_type, _, _) => { *request_type }
-            BusRequest::BusWrite32(request_type, _, _) => { *request_type }
-            BusRequest::BusWrite64(request_type, _, _) => { *request_type }
+            BusRequest::BusWrite32(request_type, _, _, _) => { *request_type }
+            BusRequest::BusWrite64(request_type, _, _, _) => { *request_type }
             BusRequest::BusWrite128(request_type, _, _) => { *request_type }
         }
     }
 
-    pub fn request_bytes(&self) -> u64 {
-        match self {
-            BusRequest::BusRead32(_, _) => { 4 }
-            BusRequest::BusRead64(_, _) => { 8 }
-            BusRequest::BusRead128(_, _) => { 16 }
-            BusRequest::BusRead256(_, _) => { 32 }
-            BusRequest::BusWrite8(_, _, _) => { 1 }
-            BusRequest::BusWrite16(_, _, _) => { 2 }
-            BusRequest::BusWrite24(_, _, _) => { 3 }
-            BusRequest::BusWrite32(_, _, _) => { 4 }
-            BusRequest::BusWrite64(_, _, _) => { 8 }
-            BusRequest::BusWrite128(_, _, _) => { 16 }
-        }
-    }
 
     pub fn read(&self) -> bool {
         match self {
@@ -276,11 +242,8 @@ impl BusRequest {
             BusRequest::BusRead64(_, _) => { true }
             BusRequest::BusRead128(_, _) => { true }
             BusRequest::BusRead256(_, _) => { true }
-            BusRequest::BusWrite8(_, _, _) => { false }
-            BusRequest::BusWrite16(_, _, _) => { false }
-            BusRequest::BusWrite24(_, _, _) => { false }
-            BusRequest::BusWrite32(_, _, _) => { false }
-            BusRequest::BusWrite64(_, _, _) => { false }
+            BusRequest::BusWrite32(_, _, _, _) => { false }
+            BusRequest::BusWrite64(_, _, _, _) => { false }
             BusRequest::BusWrite128(_, _, _) => { false }
         }
     }
@@ -298,17 +261,31 @@ impl std::fmt::Display for Reason {
 impl std::fmt::Display for BusRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BusRequest::BusRead32(RequestType::UncachedDataRead ,addr) => write!(f, "ReadData32({:#08x})", addr),
-            BusRequest::BusRead32(RequestType::UncachedInstructionRead ,addr) => write!(f, "ReadInst32({:#08x})", addr),
-            BusRequest::BusRead64(RequestType::UncachedDataRead, addr) => write!(f, "ReadData64({:#08x})", addr),
-            BusRequest::BusRead128(RequestType::DCacheFill, addr) => write!(f, "FillDCache128({:#08x})", addr),
-            BusRequest::BusRead256(RequestType::ICacheFill, addr) => write!(f, "FillICache256({:#08x})", addr),
-            BusRequest::BusWrite8(RequestType::UncachedWrite, addr, data) => write!(f, "Write8({:#08x}, {:#02x})", addr, data),
-            BusRequest::BusWrite16(RequestType::UncachedWrite, addr, data) => write!(f, "Write16({:#08x}, {:#04x})", addr, data),
-            BusRequest::BusWrite24(RequestType::UncachedWrite, addr, data) => write!(f, "Write24({:#08x}, {:#06x})", addr, data),
-            BusRequest::BusWrite32(RequestType::UncachedWrite, addr, data) => write!(f, "Write32({:#08x}, {:#08x})", addr, data),
-            BusRequest::BusWrite64(RequestType::UncachedWrite, addr, data) => write!(f, "Write64({:#08x}, {:#016x})", addr, data),
-            BusRequest::BusWrite128(RequestType::DCacheWriteback, addr, data) => write!(f, "WriteCache128({:08x}, {:?})", addr, data),
+            BusRequest::BusRead32(RequestType::UncachedDataRead ,addr) => write!(f, "ReadData32({:#010x})", addr),
+            BusRequest::BusRead32(RequestType::UncachedInstructionRead ,addr) => write!(f, "ReadInst32({:#010x})", addr),
+            BusRequest::BusRead64(RequestType::UncachedDataRead, addr) => write!(f, "ReadData64({:#010x})", addr),
+            BusRequest::BusRead128(RequestType::DCacheFill, addr) => write!(f, "FillDCache128({:#010x})", addr),
+            BusRequest::BusRead256(RequestType::ICacheFill, addr) => write!(f, "FillICache256({:#010x})", addr),
+            BusRequest::BusWrite32(RequestType::UncachedWrite, addr, data, mask) => {
+                let shift = 8 * (addr & 0x4);
+                let word = (data >> shift) as u32;
+                let mask_val = (mask.value() >> shift) as u32;
+                if mask_val == 0xffff_ffff {
+                    write!(f, "Write32({:#010x}, {:#010x})", addr, word)
+                } else {
+                    write!(f, "Write32({:#010x}, ({:#010x} & {:?}))", addr, word, mask)
+                }
+            }
+            BusRequest::BusWrite64(RequestType::UncachedWrite, addr, data, mask) => {
+                if mask.value() == !0u64 {
+                    write!(f, "Write64({:#010x}, {:#018x})", addr, data)
+                } else {
+                    write!(f, "Write64({:#010x}, ({:#018x} & {:#018x}))", addr, data, mask.value())
+                }
+            }
+            BusRequest::BusWrite128(RequestType::DCacheWriteback, addr, data) => {
+                write!(f, "WriteCache128({:08x}, {:?})", addr, data)
+            }
             _ => panic!("Unknown BusRequest {:?}", self),
         }
     }
