@@ -554,7 +554,7 @@ impl Pipeline {
                 }
             }
             ExMode::SubU32 => {
-                let out = rf.alu_b.wrapping_sub(rf.alu_a) as u32;
+                let out = (rf.alu_b as u32).wrapping_sub(rf.alu_a as u32);
                 ex.alu_out = out as i32 as u64; // sign extend
             }
             ExMode::Sub64 => {
