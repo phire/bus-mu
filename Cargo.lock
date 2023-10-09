@@ -1545,6 +1545,7 @@ dependencies = [
  "clap",
  "common",
  "egui",
+ "modular-bitfield",
  "vr4300",
 ]
 

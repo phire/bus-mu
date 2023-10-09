@@ -15,3 +15,4 @@ common = { path = "../common" }
 anyhow = { workspace = true }
 egui = { workspace = true, optional = true }
 clap = { workspace = true }
+modular-bitfield =  { workspace = true }

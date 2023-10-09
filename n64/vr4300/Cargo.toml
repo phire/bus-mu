@@ -9,6 +9,6 @@ edition = "2021"
 ui = ["egui"]
 
 [dependencies]
-modular-bitfield = "0.11.2"
+modular-bitfield = { workspace = true }
 egui = { workspace = true, optional = true }
 common = { path = "../../common" }
