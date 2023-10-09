@@ -884,7 +884,9 @@ impl Pipeline {
                 self.wb.stalled = false;
             }
             MemoryResponce::UncachedDataRead(value) => {
-                assert!(transfers == self.dc.mem_size as usize / 4 , "Bus state machine stalled");
+                if self.dc.mem_size == 8 {
+                    assert!(transfers == 2, "Bus state machine stalled");
+                }
                 let value = match self.dc.mem_mode {
                     Some(MemMode::LoadSignExtend(up, down)) => {
                         (value.wrapping_shl(up as u32) as i64 >> down) as u64
@@ -899,6 +901,7 @@ impl Pipeline {
                         temp as i32 as u64 // sign extend
                     }
                     Some(MemMode::LoadMergeDouble(align)) => {
+                        assert!(transfers == 2, "Bus state machine stalled");
                         let mut temp = self.dc.alu_out;
                         self.dc.mem_mask.masked_insert(&mut temp, value >> align);
 
