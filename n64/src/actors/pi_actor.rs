@@ -119,8 +119,14 @@ impl PiActor {
         if let Some((dma_time, _)) = outbox.try_cancel::<DmaTransfer>() {
             self.queued_dma_event = dma_time;
         }
+        if let Some((bus_time, _)) = outbox.try_cancel::<BusRequest>() {
+            // TODO: This doesn't seem quite right, might need a better solution.
+            //       This happens when a CBusRead/CBusWrite lands on the same cycle
+            //       of a DmaTransfer event. The DmaTransfer runs first,
+            self.queued_dma_event = bus_time;
+        }
 
-        assert!(outbox.is_empty());
+        assert!(outbox.is_empty(), "outbox should be empty, but has {}", outbox.msg_type_name());
     }
 }
 
@@ -128,12 +134,17 @@ impl Actor<N64Actors> for PiActor {
     type OutboxType = PiOutbox;
 
     #[inline(always)]
-    fn delivering<Message>(&mut self, outbox: &mut PiOutbox, _: &Message, _: Time)
+    fn delivering<Message>(&mut self, outbox: &mut PiOutbox, _: &Message, time: Time)
     where
         Message: 'static,
     {
         if TypeId::of::<Message>() != TypeId::of::<DmaTransfer>() && self.queued_dma_event != Time::MAX {
-            outbox.send::<Self>(DmaTransfer, self.queued_dma_event);
+            let event_time = if time > self.queued_dma_event {
+                time
+            } else {
+                self.queued_dma_event
+            };
+            outbox.send::<Self>(DmaTransfer, event_time);
             self.queued_dma_event = Time::MAX;
         }
     }
@@ -197,7 +208,7 @@ impl Handler<N64Actors, CBusWrite> for PiActor {
             }
             _ => unreachable!(),
         }
-        outbox.send::<CpuActor>(WriteFinished {}, time.add(4));
+        outbox.send::<CpuActor>(WriteFinished {}, time.add(1));
 
         SchedulerResult::Ok
     }
@@ -259,7 +270,7 @@ impl Handler<N64Actors, CBusRead> for PiActor {
             }
             _ => unreachable!(),
         };
-        outbox.send::<CpuActor>(ReadFinished { data }, time.add(4));
+        outbox.send::<CpuActor>(ReadFinished { data }, time.add(1));
 
         SchedulerResult::Ok
     }
@@ -301,7 +312,7 @@ impl Handler<N64Actors, PiRead> for PiActor {
 
         let cycles = domain.calc_cycles(addr, 2);
 
-        outbox.send::<CpuActor>(ReadFinished { data }, time.add(cycles));
+        outbox.send::<CpuActor>(ReadFinished { data }, time.add(cycles + 1));
 
         SchedulerResult::Ok
     }
