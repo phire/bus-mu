@@ -611,15 +611,15 @@ impl Pipeline {
                 ex.alu_out = (rf.alu_a as i64).wrapping_shr(rf.alu_b as u32) as u64;
             }
             ExMode::Mul32 => {
-                let out = (rf.alu_a as i64).wrapping_mul(rf.alu_b as i64);
+                let out = (rf.alu_a as i32 as i64).wrapping_mul(rf.alu_b as i32 as i64);
                 let hi = (out >> 32) as i32 as u64; // sign extend
                 let lo = out as i32 as u64; // sign extend
                 ex.hilo = [hi, lo];
             }
             ExMode::MulU32 => {
-                let out = (rf.alu_a as u64).wrapping_mul(rf.alu_b as u64);
-                let hi = (out >> 32) as u32 as u64; // sign extend
-                let lo = out as u32 as u64; // sign extend
+                let out = (rf.alu_a as u32 as u64).wrapping_mul(rf.alu_b as u32 as u64);
+                let hi = (out >> 32) as i32 as u64; // sign extend
+                let lo = out as i32 as u64; // sign extend
                 ex.hilo = [hi, lo];
             }
             ExMode::Mul64 => {
