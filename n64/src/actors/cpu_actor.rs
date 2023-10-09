@@ -259,7 +259,7 @@ impl CpuActor {
             }
         }
 
-        let can_recurse = self.recursion < RECURSION_LIMIT && limit > finish_time && outbox.contains::<CpuRun>();
+        let can_recurse = self.recursion < RECURSION_LIMIT && outbox.contains::<CpuRun>() && outbox.time() < limit;
 
         match catchup_result {
             SchedulerResult::Ok if can_recurse => {  }
