@@ -3,6 +3,7 @@ pub mod actors;
 
 pub mod cic;
 pub mod pif;
+pub mod vi;
 mod c_bus;
 mod d_bus;
 
