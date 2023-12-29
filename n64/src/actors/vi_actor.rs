@@ -23,6 +23,8 @@ make_outbox!(
 
 impl Default for ViActor {
     fn default() -> Self {
+
+        let (vi_core, _resolver) = crate::vi::new();
         Self {
             ctrl: ViCtrl::new(),
             fb_origin: 0,
@@ -30,7 +32,7 @@ impl Default for ViActor {
             v_intr: 0x3ff,
             output_format: Default::default(),
             dirty: false,
-            vi_core: Default::default(),
+            vi_core,
         }
     }
 }

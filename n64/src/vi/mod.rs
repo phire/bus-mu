@@ -88,7 +88,7 @@ impl ViCore {
         self.h_pos += vi_cycles - self.vi_cycles;
         self.vi_cycles = vi_cycles;
 
-        cycles
+        todo!()
     }
 
     pub fn run_prefetch(&mut self, rcp_cycle: u64, data: &[u8]) -> (NextEvent, u64) {
@@ -104,7 +104,7 @@ impl ViCore {
     pub fn run_visablestart(&mut self, cycles: u64) -> (NextEvent, u64) {
         self.h_pos += cycles;
 
-        cycles
+        todo!()
     }
 
     pub fn format_chagned(&mut self, rcp_cycle: u64, new_format: OutputFormat) -> (NextEvent, u64) {
@@ -227,6 +227,10 @@ pub fn new() -> (ViCore, ViResolver) {
         buffer_rx,
         h_blank: true,
         v_blank: true,
+        fb_stride: 0,
+        fb_origin: 0,
+        fb_line_addr: 0,
+        fb_addr: 0,
     };
 
     let resolver = ViResolver {
