@@ -63,40 +63,44 @@ impl Core {
             );
             // TODO: implement flush buffers
             let reason = Reason::BusRequest(match reason {
-                ExitReason::Ok => { continue; }
-                ExitReason::Blocked => {
+                Ok(()) | Err(ExitReason::Stalled) => { continue; }
+                Err(ExitReason::Blocked) => {
                     cycles = cycle_limit;
                     break;
                 }
-                ExitReason::Mem(MemoryReq::ICacheFill(addr)) => {
-                    println!("ICache fill: {:08x}", addr);
-                    BusRequest::BusRead256(RequestType::ICacheFill, addr)
+                Err(ExitReason::Mem(mem)) => {
+                    match mem {
+                        MemoryReq::ICacheFill(addr) => {
+                            println!("ICache fill: {:08x}", addr);
+                            BusRequest::BusRead256(RequestType::ICacheFill, addr)
+                        }
+                        MemoryReq::DCacheFill(addr) => {
+                            println!("DCache fill: {:08x}", addr);
+                            BusRequest::BusRead128(RequestType::DCacheFill, addr)
+                        }
+                        MemoryReq::DCacheReplace(new_addr, old_addr, data) => {
+                            println!("DCache replace: {:08x} -> {:08x}", old_addr, new_addr);
+                            self.queued_flush = Some((old_addr, data));
+                            BusRequest::BusRead128(RequestType::DCacheFill, new_addr)
+                        }
+                        MemoryReq::UncachedInstructionRead(addr) => {
+                            //println!("Uncached instruction read: {:08x}", addr);
+                            BusRequest::BusRead32(RequestType::UncachedInstructionRead, addr)
+                        }
+                        MemoryReq::UncachedDataReadWord(addr) => {
+                            BusRequest::BusRead32(RequestType::UncachedDataRead, addr)
+                        },
+                        MemoryReq::UncachedDataReadDouble(addr) => {
+                            BusRequest::BusRead64(RequestType::UncachedDataRead, addr)
+                        },
+                        MemoryReq::UncachedDataWriteWord(addr, data, mask) => {
+                            BusRequest::BusWrite32(RequestType::UncachedWrite, addr, data, mask)
+                        },
+                        MemoryReq::UncachedDataWriteDouble(addr, data, mask) => {
+                            BusRequest::BusWrite64(RequestType::UncachedWrite, addr, data, mask)
+                        },
+                    }
                 }
-                ExitReason::Mem(MemoryReq::DCacheFill(addr)) => {
-                    println!("DCache fill: {:08x}", addr);
-                    BusRequest::BusRead128(RequestType::DCacheFill, addr)
-                }
-                ExitReason::Mem(MemoryReq::DCacheReplace(new_addr, old_addr, data)) => {
-                    println!("DCache replace: {:08x} -> {:08x}", old_addr, new_addr);
-                    self.queued_flush = Some((old_addr, data));
-                    BusRequest::BusRead128(RequestType::DCacheFill, new_addr)
-                }
-                ExitReason::Mem(MemoryReq::UncachedInstructionRead(addr)) => {
-                    //println!("Uncached instruction read: {:08x}", addr);
-                    BusRequest::BusRead32(RequestType::UncachedInstructionRead, addr)
-                }
-                ExitReason::Mem(MemoryReq::UncachedDataReadWord(addr)) => {
-                    BusRequest::BusRead32(RequestType::UncachedDataRead, addr)
-                },
-                ExitReason::Mem(MemoryReq::UncachedDataReadDouble(addr)) => {
-                    BusRequest::BusRead64(RequestType::UncachedDataRead, addr)
-                },
-                ExitReason::Mem(MemoryReq::UncachedDataWriteWord(addr, data, mask)) => {
-                    BusRequest::BusWrite32(RequestType::UncachedWrite, addr, data, mask)
-                },
-                ExitReason::Mem(MemoryReq::UncachedDataWriteDouble(addr, data, mask)) => {
-                    BusRequest::BusWrite64(RequestType::UncachedWrite, addr, data, mask)
-                },
             });
 
             return CoreRunResult {

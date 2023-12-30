@@ -1,4 +1,6 @@
 use modular_bitfield::{bitfield, specifiers::*};
+use crate::pipeline::{execute::{ExMode, CmpMode, InternalReg}, register_file::RfMode};
+
 use super::coprocessor0::COP0_REG_NAMES;
 
 #[bitfield(bits = 32)]
@@ -392,91 +394,7 @@ impl InstructionInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum RfMode {
-    JumpImm,
-    JumpImmLink, // could squash these links?
-    JumpReg,
-    JumpRegLink,
-    BranchImm1,
-    BranchImm2,
-    BranchLinkImm,
-    ImmSigned,
-    ImmUnsigned,
-    Mem,
-    RegReg,
-    RegRegNoWrite,
-    SmallImm,
-    SmallImmOffset32,
-    SmallImmNoWrite,
-    RfUnimplemented,
-}
 
-#[derive(Debug, Clone, Copy)]
-pub enum ExMode {
-    Nop,
-    Jump,
-    Branch(CmpMode),
-    BranchLikely(CmpMode),
-    Add32,
-    AddU32,
-    Add64,
-    AddU64,
-    Sub32,
-    Sub64,
-    SubU32,
-    SubU64,
-    SetLess,
-    SetLessU,
-    And,
-    Or,
-    Xor,
-    Nor,
-    InsertUpper,
-    ShiftLeft32,
-    ShiftRight32,
-    ShiftRightArith32,
-    ShiftLeft64,
-    ShiftRight64,
-    ShiftRightArith64,
-    Mul32,
-    MulU32,
-    Div32,
-    DivU32,
-    Mul64,
-    MulU64,
-    Div64,
-    DivU64,
-    Load(u8),
-    LoadUnsigned(u8),
-    LoadLeft(u8),
-    LoadRight(u8),
-    MemLoadLinked(u8),
-    Store(u8),
-    StoreLeft(u8),
-    StoreRight(u8),
-    MemStoreConditional(u8),
-    LoadInternal(InternalReg),
-    StoreInternal(InternalReg),
-    CacheOp,
-    ExUnimplemented,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum CmpMode {
-    Eq,
-    Ne,
-    Le,
-    Ge,
-    Lt,
-    Gt,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum InternalReg {
-    HI = 0,
-    LO = 1,
-}
 
 const fn build_primary_table() -> [InstructionInfo; 64] {
     use InstructionInfo::*;
