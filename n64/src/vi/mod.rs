@@ -7,7 +7,7 @@ mod aa_filter;
 mod scaler;
 pub mod control;
 
-static VI_CLOCK_RATIO : f64 = 62.5 / 48.4;
+//static VI_CLOCK_RATIO : f64 = 62.5 / 48.4;
 
 fn vi_cycles(rcp_time : u64) -> u64 {
     (rcp_time * 484) / 625
@@ -22,7 +22,7 @@ pub struct ViCore {
     /// The RCP has a cache for 32 line segments, each large enough for two or four pixels.
     /// This is not long enough to hold even a single line of pixels, even with AA disabled, so
     /// VI needs to be continually DMAing data from main memory
-    line_segments: [LineSegment; 32],
+    //line_segments: [LineSegment; 32],
     h_pos: u64,
     v_pos: u64,
     format: OutputFormat,
@@ -42,7 +42,7 @@ pub struct ViCore {
     buffer_rx: mpsc::Receiver<Vec<u8>>,
 }
 
-enum FetchType {
+pub enum FetchType {
     WithParity(u8),
     WithoutParity(u8),
 }
@@ -51,7 +51,7 @@ enum FetchType {
 // and 16bit, as there are different bugs that happen when h_start is before 128 dots and before 32 dots.
 // It look like if
 
-enum NextEvent {
+pub enum NextEvent {
     VStart, // Start of first visible line
     HStart, // Start of all other visible lines
     VisableStart, // Start of visible area
@@ -127,7 +127,6 @@ impl ViCore {
         } else {
             vi_diff -= cycles_to_end_of_line;
             self.h_pos = vi_diff % cycles_per_line;
-            let halfline_pos = (1 + self.v_pos + vi_diff / cycles_per_line) * 2;
             self.v_pos = 1 + self.v_pos + (vi_diff / cycles_per_line);
         }
 
@@ -181,9 +180,9 @@ impl ViCore {
 
     fn flush_buffer(&mut self) {
         let mut buffer = TransferBuffer {
-            format: self.format,
-            v_pos: self.v_pos as u16,
-            h_pos: self.h_pos as u16,
+            _format: self.format,
+            _v_pos: self.v_pos as u16,
+            _h_pos: self.h_pos as u16,
             dma_bytes: self.get_byte_buffer(),
         };
         core::mem::swap(&mut buffer, &mut self.buffer);
@@ -203,8 +202,8 @@ impl ViCore {
 }
 
 pub struct ViResolver {
-    flush_rx: mpsc::Receiver<TransferBuffer>,
-    buffer_tx: mpsc::Sender<Vec<u8>>,
+    _flush_rx: mpsc::Receiver<TransferBuffer>,
+    _buffer_tx: mpsc::Sender<Vec<u8>>,
 }
 
 pub fn new() -> (ViCore, ViResolver) {
@@ -212,15 +211,15 @@ pub fn new() -> (ViCore, ViResolver) {
     let (buffer_tx, buffer_rx) = mpsc::channel();
 
     let core = ViCore {
-        line_segments: Default::default(),
+       // line_segments: Default::default(),
         h_pos: 0,
         v_pos: 0,
         vi_cycles: 0,
         format: Default::default(),
         buffer: TransferBuffer {
-            format: Default::default(),
-            h_pos: 0,
-            v_pos: 0,
+            _format: Default::default(),
+            _h_pos: 0,
+            _v_pos: 0,
             dma_bytes: Vec::new(),
         },
         flush_tx,
@@ -234,18 +233,18 @@ pub fn new() -> (ViCore, ViResolver) {
     };
 
     let resolver = ViResolver {
-        flush_rx,
-        buffer_tx,
+        _flush_rx: flush_rx,
+        _buffer_tx: buffer_tx,
     };
     (core, resolver)
 }
 
 /// Each line segment is 9 bytes, so can hold 2 32bit pixels, or 4 18bit pixels.
-#[derive(Debug, Default)]
-pub struct LineSegment {
-    tag: u32, // Presumably there is some tag
-    data: [u8; 9],
-}
+// #[derive(Debug, Default)]
+// pub struct LineSegment {
+//     tag: u32, // Presumably there is some tag
+//     data: [u8; 9],
+// }
 
 /// The output buffer only contains the raw data DMAed out of memory, and any configuration needed
 /// reconstruct a final image for display.
@@ -253,8 +252,8 @@ pub struct LineSegment {
 /// This limits the amount of work needed on the main emulation thread, just the DMA copy.
 #[derive(Debug)]
 pub struct TransferBuffer {
-    format: OutputFormat,
-    h_pos: u16,
-    v_pos: u16,
+    _format: OutputFormat,
+    _h_pos: u16,
+    _v_pos: u16,
     dma_bytes: Vec<u8>,
 }

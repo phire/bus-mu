@@ -11,7 +11,7 @@ pub struct ViActor {
     v_intr: u16,
     output_format: OutputFormat,
     dirty: bool,
-    vi_core: ViCore,
+    _vi_core: ViCore,
 }
 
 make_outbox!(
@@ -32,7 +32,7 @@ impl Default for ViActor {
             v_intr: 0x3ff,
             output_format: Default::default(),
             dirty: false,
-            vi_core,
+            _vi_core: vi_core,
         }
     }
 }
