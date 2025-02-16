@@ -2,7 +2,7 @@
 
 use std::{mem::{MaybeUninit, ManuallyDrop}, any::TypeId};
 
-use crate::{MakeNamed, Time, Handler, Actor, Endpoint, OutboxSend, channel::Channel, scheduler};
+use crate::{channel::Channel, scheduler, Actor, Endpoint, Handler, MakeNamed, OutboxSend, Scheduler, SchedulerResult, Time};
 
 #[derive(Debug)]
 #[repr(C)]
@@ -35,7 +35,7 @@ where
     ActorNames: MakeNamed,
 {
     pub fn is_some(&self) -> bool {
-        self.execute_fn != scheduler::null_execute::<ActorNames>
+        !std::ptr::fn_addr_eq(self.execute_fn, scheduler::null_execute_fn::<ActorNames>())
     }
     pub fn msg_type(&self) -> TypeId {
         self.msg_type
@@ -48,7 +48,7 @@ where
     Message: 'static,
 {
     pub fn is_some(&self) -> bool {
-        self.execute_fn != scheduler::null_execute::<ActorNames>
+        !std::ptr::fn_addr_eq(self.execute_fn, scheduler::null_execute_fn::<ActorNames>())
     }
 
     pub fn msg_type(&self) -> TypeId {
@@ -108,7 +108,7 @@ where
         }
 
         self.msg_type = TypeId::of::<()>();
-        self.execute_fn = scheduler::null_execute::<ActorNames>;
+        self.execute_fn = scheduler::null_execute_fn::<ActorNames>();
 
         let mut time = Time::MAX;
         std::mem::swap(&mut self.time, &mut time);
@@ -140,7 +140,7 @@ where
     fn default() -> Self {
         Self {
             time: Time::MAX,
-            execute_fn: scheduler::null_execute::<ActorNames>,
+            execute_fn: scheduler::null_execute_fn::<ActorNames>(),
             msg_type: TypeId::of::<()>(),
             endpoint_fn: MaybeUninit::uninit(),
             data: MaybeUninit::new(ManuallyDrop::new(())),

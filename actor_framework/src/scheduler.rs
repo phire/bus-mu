@@ -751,11 +751,18 @@ where
     // result
 }
 
-pub(super) fn null_execute<ActorNames>(_: ActorNames, _: &mut Scheduler<ActorNames>, _: Time) -> SchedulerResult
+fn null_execute<ActorNames>(_: ActorNames, _: &mut Scheduler<ActorNames>, _: Time) -> SchedulerResult
 where
     ActorNames: MakeNamed,
 {
     panic!("Scheduler tried to execute an empty message");
+}
+
+pub(super) const fn null_execute_fn<ActorNames>() -> ExecuteFn<ActorNames>
+where
+    ActorNames: MakeNamed,
+{
+    null_execute::<ActorNames>
 }
 
 pub(super) type EndpointFn<ActorNames, Message> = for<'a> fn(
