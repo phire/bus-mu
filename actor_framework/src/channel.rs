@@ -6,7 +6,7 @@ use crate::{MakeNamed, Actor, Handler};
 ///
 /// Channel uses static dispatch internally, to make delivering messages as fast as a direct send.
 /// If the Sender is dynamic compile time, use `Endpoint` instead.
-#[derive(Copy, PartialEq, Eq)]
+#[derive(Copy)]
 pub struct Channel<ActorNames, Sender, Message>
     where
         ActorNames: MakeNamed,

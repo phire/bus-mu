@@ -2,7 +2,7 @@
 
 use std::{mem::{MaybeUninit, ManuallyDrop}, any::TypeId};
 
-use crate::{channel::Channel, scheduler, Actor, Endpoint, Handler, MakeNamed, OutboxSend, Scheduler, SchedulerResult, Time};
+use crate::{channel::Channel, scheduler, Actor, Endpoint, Handler, MakeNamed, OutboxSend, Time};
 
 #[derive(Debug)]
 #[repr(C)]
