@@ -1,5 +1,5 @@
 
-use modular_bitfield::{bitfield, specifiers::*, BitfieldSpecifier};
+use modular_bitfield::{bitfield, specifiers::*, Specifier};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct OutputFormat {
@@ -176,7 +176,7 @@ pub struct ViCtrl {
     #[skip] __: B15,
 }
 
-#[derive(BitfieldSpecifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
 #[bits = 2]
 pub enum PixelType {
     Blank,
@@ -185,7 +185,7 @@ pub enum PixelType {
     Rgb8a5c3, // 24bit color, 5 bits alpha, 3 bits coverage
 }
 
-#[derive(BitfieldSpecifier, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Specifier, Debug, Clone, Copy, PartialEq, Eq)]
 #[bits = 2]
 pub enum AaMode {
     Enabled,
@@ -265,7 +265,7 @@ pub struct ViScale {
 }
 
 #[bitfield(bits = 16)]
-#[derive(BitfieldSpecifier, Debug, Default, Copy, Clone, PartialEq, Eq)]
+#[derive(Specifier, Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub struct Fixed2_10 {
     pub fractional: B10,
     pub integer: B2,

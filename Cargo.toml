@@ -33,7 +33,7 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 
 [workspace.dependencies]
-modular-bitfield = "0.11.2"
+modular-bitfield = { git = "https://github.com/phire/modular-bitfield.git", rev = "b922ff94" }
 eframe = "0.24"
 egui = "0.24"
 anyhow = "1.0"
@@ -41,3 +41,4 @@ clap = { version = "4.4", features = ["derive"] }
 
 [profile.release]
 #lto = true
+
