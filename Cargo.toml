@@ -5,6 +5,7 @@ members = [
     "n64",
     "n64/vr4300",
     "ui/",
+    "tailspin",
 ]
 exclude = ["deps"]
 

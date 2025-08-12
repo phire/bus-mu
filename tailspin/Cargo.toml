@@ -1,0 +1,11 @@
+[package]
+name = "tailspin"
+version.workspace = true
+edition = "2024"
+
+[lib]
+
+[dependencies]
+psm = "0.1.26"
+inventory = "0.3.20"
+
