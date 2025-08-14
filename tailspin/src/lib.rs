@@ -1,11 +1,9 @@
 #![feature(explicit_tail_calls)]
 
-
 #[derive(Copy, Clone)]
 struct Op(u32);
 struct State {
-    r0: u64,
-    r1: u64,
+    regs: [u64; 32],
 }
 
 struct ExitCode(u32);
@@ -21,15 +19,16 @@ struct Args<'a>{
     r2: u64,
 }
 
+
 type Handler = fn(pp: *const Op, handlers: Handlers, op: Op, cp: *const u8, state: &mut State, r0: u64, r1: u64, r2: u64) -> ExitCode;
 
 macro_rules! handler_fn {
     // This nested macro is here to minimize the number of places we need to update the handler function prototype.
     // Once we have a function prototype locked in, it might be wise to just duplicate it everywhere.
     (
-        fn $name:ident $( < $( $lt:tt $( : $clt:tt $(+ $dlt:tt )* )? ),+ >)? ($args:ident: Args) -> ExitCode $body:block
+        fn $name:ident $( < $( const $lt:tt $( : $clt:tt $(+ $dlt:tt )* )? ),+ >)? ($args:ident: Args) -> ExitCode $body:block
     ) => {
-        fn $name$ (< $( $lt $( : $clt $(+ $dlt )* )? ),+ >)?
+        fn $name$ (< $( const $lt $( : $clt $(+ $dlt )* )? ),+ >)?
         (pp: *const Op, handlers: Handlers, op: Op, cp: *const u8, state: &mut State, r0: u64, r1: u64, r2: u64) -> ExitCode
         {
             #[allow(unused_mut)]
@@ -40,10 +39,10 @@ macro_rules! handler_fn {
     };
 
     (
-        fn $name:ident $( < $( $lt:tt $( : $clt:tt $(+ $dlt:tt )* )? ),+ >)? ($args:ident: Args) $body:block
+        fn $name:ident $( < $( const $lt:tt $( : $clt:tt $(+ $dlt:tt )* )? ),+ >)? ($args:ident: Args) $body:block
     ) => {
         handler_fn! {
-            fn $name$ (< $( $lt $( : $clt $(+ $dlt )* )? ),+ >)? ($args: Args) -> ExitCode {
+            fn $name$ (< $( const $lt $( : $clt $(+ $dlt )* )? ),+ >)? ($args: Args) -> ExitCode {
                 $body
 
                 // Safety: bytecode will always terminate or loop before the end of the buffer
@@ -61,10 +60,28 @@ macro_rules! handler_fn {
     };
 }
 
+
+impl Args<'_> {
+    fn get<const OPND: i32>(&mut self) -> &mut u64 {
+        match OPND {
+            0 => &mut self.r0,
+            1 => &mut self.r1,
+            2 => &mut self.r2,
+            -1 => unsafe {
+                let reg = *self.cp;
+                self.cp = self.cp.add(1);
+                self.state.regs.get_unchecked_mut(reg as usize)
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+
+
 #[inline(never)]
 fn start(pp: *const Op, cp: *const u8, state: &mut State) -> ExitCode {
-    let r0 = state.r0;
-    let r1 = state.r1;
+    let r0 = state.regs[0];
+    let r1 = state.regs[1];
     let r2 = 0;
 
     let handlers = Handlers(OPS.as_ptr());
@@ -80,12 +97,7 @@ trait Mode {
     fn exec2<F: FnOnce(u64, u64) -> u64>(f: F, args: &mut Args);
 }
 
-struct TwoReg;
-impl Mode for TwoReg {
-    fn exec2<F: FnOnce(u64, u64) -> u64>(f: F, args: &mut Args) {
-        args.r0 = f(args.r0, args.r2);
-    }
-}
+
 
 #[derive(Copy, Clone)]
 struct Handlers(*const Handler);
@@ -95,11 +107,15 @@ macro_rules! wrap_op {
         $name:ident($a:ident: u64, $b:ident: u64) -> u64 $body:block
     ) => {
         handler_fn!{
-            fn $name<M: Mode>(args: Args) {
+            fn $name<const A: i32, const B: i32, const DEST: i32>(args: Args) {
                 #[inline(always)]
                 fn inner($a: u64, $b: u64) -> u64 $body
 
-                M::exec2(inner, &mut args);
+                let a = *args.get::<A>();
+                let b = *args.get::<B>();
+                *args.get::<DEST>() = inner(a, b);
+
+                //M::exec2(inner, &mut args);
             }
         }
     };
@@ -121,8 +137,9 @@ macro_rules! wrap_op {
             fn $name(args: Args) -> ExitCode {
                 let exitcode = $body;
 
-                args.state.r0 = args.r0;
-                args.state.r1 = args.r1;
+                args.state.regs[0] = args.r0;
+                args.state.regs[1] = args.r1;
+                args.state.regs[2] = args.r2;
 
                 return exitcode;
             }
@@ -131,11 +148,11 @@ macro_rules! wrap_op {
 }
 
 wrap_op!( op_add(a: u64, b: u64) -> u64 {
-    a + b
+    u64::wrapping_add(a, b)
 });
 
 wrap_op!( op_sub(a: u64, b: u64) -> u64 {
-    a - b
+    u64::wrapping_sub(a, b)
 });
 
 wrap_op!( op_exit() -> ExitCode {
@@ -144,35 +161,42 @@ wrap_op!( op_exit() -> ExitCode {
     ExitCode(0)
 });
 
+struct TwoReg;
+impl Mode for TwoReg {
+    fn exec2<F: FnOnce(u64, u64) -> u64>(f: F, args: &mut Args) {
+        args.r0 = f(args.r0, args.r2);
+    }
+}
+
 const OPS: [Handler; 4] = [
-    op_add::<TwoReg>,
-    op_sub::<TwoReg>,
-    op_exit,
+    op_add::<-1, -1, -1>,
+    op_add::<-1, -1, 0>,
+    op_sub::<-1, -1, -1>,
     op_exit,
 ];
 
 pub fn run() -> u64{
     let bytecode = [Op(0), Op(3)]; // add, exit
-    let consts = [0u8, 0u8];
+    let consts = [0u8, 1u8, 4u8];
     let pp = bytecode.as_ptr() as *const Op;
     let cp = consts.as_ptr() as *const u8;
 
     println!("Starting tailspin...");
 
     let mut state = State {
-        r0: 2,
-        r1: 5,
+        regs: [0; 32],
     };
+    state.regs[0] = 5;
+    state.regs[1] = 2;
 
     let exit = start(pp, cp, &mut state);
 
     println!("Exit code: {:?}", exit.0);
-    println!("R0: {:?}", state.r0);
-    println!("R1: {:?}", state.r1);
+    println!("R0: {:?}", state.regs[0]);
+    println!("R1: {:?}", state.regs[1]);
 
-    state.r0
+    state.regs[4]
 }
-
 
 #[cfg(test)]
 mod tests {
