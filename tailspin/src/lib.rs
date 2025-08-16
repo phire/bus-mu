@@ -75,6 +75,26 @@ impl Args<'_> {
             _ => unreachable!(),
         }
     }
+
+    fn access2<const A: i32, const B: i32, const DEST: i32>(&mut self) -> Accessor<DEST> {
+        let a = *self.get::<A>();
+        let b = *self.get::<B>();
+        Accessor { a, b, args: 0 }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct Accessor<const DEST: i32> {
+    a: u64,
+    b: u64,
+    args: usize,
+}
+
+impl<const DEST: i32> Accessor<DEST> {
+    fn store(self, args: &mut Args, value: u64) {
+        let  _ = self.args;
+        *args.get::<{DEST}>() = value;
+    }
 }
 
 
@@ -111,9 +131,8 @@ macro_rules! wrap_op {
                 #[inline(always)]
                 fn inner($a: u64, $b: u64) -> u64 $body
 
-                let a = *args.get::<A>();
-                let b = *args.get::<B>();
-                *args.get::<DEST>() = inner(a, b);
+                let access = args.access2::<A, B, DEST>();
+                access.store(&mut args, inner(access.a, access.b));
 
                 //M::exec2(inner, &mut args);
             }
