@@ -2329,9 +2329,15 @@ name = "tailspin"
 version = "0.1.0"
 dependencies = [
  "inventory",
-"paste",
-"paste",
+ "paste",
  "psm",
+]
+
+[[package]]
+name = "tailspin-toy"
+version = "0.1.0"
+dependencies = [
+ "tailspin",
 ]
 
 [[package]]

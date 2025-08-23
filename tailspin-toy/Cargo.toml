@@ -1,0 +1,7 @@
+[package]
+name = "tailspin-toy"
+version.workspace = true
+edition = "2024"
+
+[dependencies]
+tailspin = { path = "../tailspin" }
