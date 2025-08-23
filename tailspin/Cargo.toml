@@ -8,4 +8,4 @@ edition = "2024"
 [dependencies]
 psm = "0.1.26"
 inventory = "0.3.20"
-
+paste = "1.0"

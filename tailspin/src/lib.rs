@@ -1,225 +1,331 @@
+#![allow(incomplete_features)]
 #![feature(explicit_tail_calls)]
 
-#[derive(Copy, Clone)]
-struct Op(u32);
-struct State {
-    regs: [u64; 32],
-}
+pub use paste::paste;
 
-struct ExitCode(u32);
-
-struct Args<'a>{
-    pp: *const Op,
-    handlers: Handlers,
-    op: Op,
-    cp: *const u8,
-    state: &'a mut State,
-    r0: u64,
-    r1: u64,
-    r2: u64,
-}
-
-
-type Handler = fn(pp: *const Op, handlers: Handlers, op: Op, cp: *const u8, state: &mut State, r0: u64, r1: u64, r2: u64) -> ExitCode;
-
-macro_rules! handler_fn {
-    // This nested macro is here to minimize the number of places we need to update the handler function prototype.
-    // Once we have a function prototype locked in, it might be wise to just duplicate it everywhere.
+#[macro_export]
+macro_rules! tailspin {
     (
-        fn $name:ident $( < $( const $lt:tt $( : $clt:tt $(+ $dlt:tt )* )? ),+ >)? ($args:ident: Args) -> ExitCode $body:block
+        @state($state_ty:ty)
+
+        $(@op( $op_name:ident $( $stt:tt )+ ))*
     ) => {
-        fn $name$ (< $( const $lt $( : $clt $(+ $dlt )* )? ),+ >)?
-        (pp: *const Op, handlers: Handlers, op: Op, cp: *const u8, state: &mut State, r0: u64, r1: u64, r2: u64) -> ExitCode
-        {
+        type StateType = $state_ty;
+
+        #[derive(Copy, Clone)]
+        struct ExitCode(u32);
+
+        #[derive(Copy, Clone)]
+        struct Op(u32);
+
+        #[derive(Copy, Clone)]
+        pub struct Handlers(*const Handler);
+
+        type Handler = tailspin!(@argfn fn(args: Args) -> ExitCode);
+
+        trait BytecodeOp {
+            const OPCODE: Ops;
+            fn get_handlers() -> Vec<Handler>;
+        }
+
+        tailspin!( @munch(0usize, ) $(@op($op_name $( $stt )+ ))* @enum(Ops) );
+
+        struct Interpreter {
+            handlers: [Handler; 0x10000],
+        }
+
+        tailspin!(@argfn fn unimplemented_op(args: Args) -> ExitCode {
+            panic!("Unimplemented operation {:x}", args.op.0);
+        });
+
+        impl Interpreter {
+            fn new() -> Interpreter {
+                let mut handlers = vec![];
+
+                let mut insert = |handles| {
+                    handlers.extend(handles);
+                };
+
+                $( insert(<$op_name as BytecodeOp>::get_handlers()); )*
+
+                assert_eq!(handlers.len(), NUM_OPS, "Handlers count mismatch");
+                assert!(handlers.len() <= 0x10000, "Too many handlers, max is 0x10000");
+
+
+                handlers.resize(0x10000, unimplemented_op as Handler);
+
+                Interpreter { handlers: handlers.try_into().unwrap() }
+            }
+
+            unsafe fn run(&self, pp: *const Op, cp: *const u8, state: &mut $state_ty) -> ExitCode {
+                let mut args = Args {
+                    pp,
+                    handlers: Handlers(self.handlers.as_ptr()),
+                    op: Op(0), // Dummy op
+                    cp,
+                    r0: state.regs[0],
+                    r1: state.regs[1],
+                    r2: state.regs[2],
+                    state,
+                };
+
+                return args.next()(args.pp, args.handlers, args.op, args.cp, args.state, args.r0, args.r1, args.r2);
+            }
+        }
+
+        struct Args<'a> {
+            pp: *const Op,
+            handlers: Handlers,
+            op: Op,
+            cp: *const u8,
+            state: &'a mut $state_ty,
+            r0: u64,
+            r1: u64,
+            r2: u64,
+        }
+
+        impl Args<'_> {
+            #[inline(always)]
+            fn next(&mut self) -> Handler {
+                // Safety: pp will point at valid op
+                self.op = unsafe { *self.pp };
+                // Safety: bytecode will always terminate or loop before the end of the buffer
+                self.pp = unsafe { self.pp.add(1) };
+
+                // Safety: all bytecode entries will point at a valid handler
+                unsafe { *self.handlers.0.add(self.op.0 as usize & 0xff) }
+            }
+
+            fn get<const OPND: i32>(&mut self) -> &mut u64 {
+                match OPND {
+                    0 => &mut self.r0,
+                    1 => &mut self.r1,
+                    2 => &mut self.r2,
+                    -1 => unsafe {
+                        let reg = *self.cp;
+                        self.cp = self.cp.add(1);
+                        self.state.regs.get_unchecked_mut(reg as usize)
+                    },
+                    _ => unreachable!(),
+                }
+            }
+        }
+    };
+
+    // Convert from tail-call form to Args struct
+    ( @argfn
+        fn $($name:ident)? $( < $( const $lt:tt $( : $clt:tt $(+ $dlt:tt )* )? ),+ >)?
+            ( $args:ident : Args ) -> $ret:ty
+            $($body:block)?
+    ) => {
+        fn $($name)? $(< $( const $lt $( : $clt $(+ $dlt )* )? ),+ >)? (
+            pp: *const Op,
+            handlers: Handlers,
+            op: Op,
+            cp: *const u8,
+            state: &mut StateType,
+            r0: u64,
+            r1: u64,
+            r2: u64
+         ) -> $ret $( {
+
             #[allow(unused_mut)]
             let mut $args = Args { pp, handlers, op, cp, state, r0, r1, r2 };
 
             $body
-        }
+         } )?
     };
 
-    (
-        fn $name:ident $( < $( const $lt:tt $( : $clt:tt $(+ $dlt:tt )* )? ),+ >)? ($args:ident: Args) $body:block
-    ) => {
-        handler_fn! {
-            fn $name$ (< $( const $lt $( : $clt $(+ $dlt )* )? ),+ >)? ($args: Args) -> ExitCode {
-                $body
-
-                // Safety: bytecode will always terminate or loop before the end of the buffer
-                unsafe {
-                    $args.op = *$args.pp;
-                    $args.pp = $args.pp.add(1);
-                }
-
-                // Safety: all bytecode entries will point at a valid handler
-                let handler = unsafe { *$args.handlers.0.add($args.op.0 as usize & 0xff) };
-
-                become handler($args.pp, $args.handlers, $args.op, $args.cp, $args.state, $args.r0, $args.r1, $args.r2);
-            }
-        }
+    // Dispatch (converts from Args struct back to a tail call)
+    ( @dispatch $args:ident ) => {
+        become $args.next()($args.pp, $args.handlers, $args.op, $args.cp, $args.state, $args.r0, $args.r1, $args.r2)
     };
-}
 
-
-impl Args<'_> {
-    fn get<const OPND: i32>(&mut self) -> &mut u64 {
-        match OPND {
-            0 => &mut self.r0,
-            1 => &mut self.r1,
-            2 => &mut self.r2,
-            -1 => unsafe {
-                let reg = *self.cp;
-                self.cp = self.cp.add(1);
-                self.state.regs.get_unchecked_mut(reg as usize)
-            },
-            _ => unreachable!(),
-        }
-    }
-
-    fn access2<const A: i32, const B: i32, const DEST: i32>(&mut self) -> Accessor<DEST> {
-        let a = *self.get::<A>();
-        let b = *self.get::<B>();
-        Accessor { a, b, args: 0 }
-    }
-}
-
-#[derive(Copy, Clone)]
-struct Accessor<const DEST: i32> {
-    a: u64,
-    b: u64,
-    args: usize,
-}
-
-impl<const DEST: i32> Accessor<DEST> {
-    fn store(self, args: &mut Args, value: u64) {
-        let  _ = self.args;
-        *args.get::<{DEST}>() = value;
-    }
-}
-
-
-#[inline(never)]
-fn start(pp: *const Op, cp: *const u8, state: &mut State) -> ExitCode {
-    let r0 = state.regs[0];
-    let r1 = state.regs[1];
-    let r2 = 0;
-
-    let handlers = Handlers(OPS.as_ptr());
-    let op = Op(0); // Dummy op
-
-    // Use the handler_fn macro to instance the dispatch code
-    handler_fn! { fn start_inner(args: Args) {} }
-    return start_inner(pp, handlers, op, cp, state, r0, r1, r2);
-}
-
-
-trait Mode {
-    fn exec2<F: FnOnce(u64, u64) -> u64>(f: F, args: &mut Args);
-}
-
-
-
-#[derive(Copy, Clone)]
-struct Handlers(*const Handler);
-
-macro_rules! wrap_op {
-    ( // Two arg
-        $name:ident($a:ident: u64, $b:ident: u64) -> u64 $body:block
+    // Munch binary ops - @op(Name($a: u64, $b: u64) -> u64 { ... })
+    ( @munch($count:expr, $($parsed:tt)*)
+        @op($opname:ident ($a:ident : $a_ty:tt, $b:ident : $b_ty:tt) -> $ret:tt $body:block)
+        $( $tail:tt )*
     ) => {
-        handler_fn!{
-            fn $name<const A: i32, const B: i32, const DEST: i32>(args: Args) {
+
+        struct $opname;
+
+        impl $opname {
+            tailspin!(@argfn fn exec2<const A: i32, const B: i32, const DEST: i32>(args: Args) -> ExitCode {
+
                 #[inline(always)]
                 fn inner($a: u64, $b: u64) -> u64 $body
 
-                let access = args.access2::<A, B, DEST>();
-                access.store(&mut args, inner(access.a, access.b));
+                let $a = *args.get::<A>();
+                let $b = *args.get::<B>();
 
-                //M::exec2(inner, &mut args);
+                *args.get::<DEST>() = inner($a, $b);
+
+                tailspin!(@dispatch args)
+            });
+        }
+
+        impl BytecodeOp for $opname {
+            const OPCODE: Ops = Ops::$opname;
+            fn get_handlers() -> Vec<Handler> {
+                vec![
+                    Self::exec2::<-1, -1, -1> as Handler,
+                    Self::exec2::<-1, -1, 0> as Handler,
+                    Self::exec2::<-1, -1, 1> as Handler,
+                    Self::exec2::<-1, -1, 2> as Handler,
+
+                    Self::exec2::<0, 1, -1> as Handler,
+                    Self::exec2::<0, 1, 0> as Handler,
+                    Self::exec2::<0, 1, 1> as Handler,
+                    Self::exec2::<0, 1, 2> as Handler,
+
+                    Self::exec2::<1, 2, -1> as Handler,
+                    Self::exec2::<1, 2, 0> as Handler,
+                    Self::exec2::<1, 2, 1> as Handler,
+                    Self::exec2::<1, 2, 2> as Handler,
+
+                    Self::exec2::<-1, 0, -1> as Handler,
+                    Self::exec2::<-1, 0, 0> as Handler,
+                    Self::exec2::<-1, 0, 1> as Handler,
+                    Self::exec2::<-1, 0, 2> as Handler,
+
+                    Self::exec2::<-1, 1, -1> as Handler,
+                    Self::exec2::<-1, 1, 0> as Handler,
+                    Self::exec2::<-1, 1, 1> as Handler,
+                    Self::exec2::<-1, 1, 2> as Handler,
+
+                    Self::exec2::<-1, 2, -1> as Handler,
+                    Self::exec2::<-1, 2, 0> as Handler,
+                    Self::exec2::<-1, 2, 1> as Handler,
+                    Self::exec2::<-1, 2, 2> as Handler,
+                ]
             }
         }
+
+        tailspin!(@munch($count + 24usize, $($parsed)*
+                $opname // Implicitly _RN_RN_RN
+                [< $opname _Rn_Rn_R0 >]
+                [< $opname _Rn_Rn_R1 >]
+                [< $opname _Rn_Rn_R2 >]
+
+                [< $opname _R0_R1_Rn >]
+                [< $opname _R0_R1_R0 >]
+                [< $opname _R0_R1_R1 >]
+                [< $opname _R0_R1_R2 >]
+
+                [< $opname _R1_R2_Rn >]
+                [< $opname _R1_R2_R0 >]
+                [< $opname _R1_R2_R1 >]
+                [< $opname _R1_R2_R2 >]
+
+                [< $opname _Rn_R0_Rn >]
+                [< $opname _Rn_R0_R0 >]
+                [< $opname _Rn_R0_R1 >]
+                [< $opname _Rn_R0_R2 >]
+
+                [< $opname _Rn_R1_Rn >]
+                [< $opname _Rn_R1_R0 >]
+                [< $opname _Rn_R1_R1 >]
+                [< $opname _Rn_R1_R2 >]
+
+                [< $opname _Rn_R2_Rn >]
+                [< $opname _Rn_R2_R0 >]
+                [< $opname _Rn_R2_R1 >]
+                [< $opname _Rn_R2_R2 >]
+            )
+            $($tail)*
+        );
     };
 
-    ( // Access args
-        $name:ident($args:ident: &mut Args) $body:block
+    // Munch @op(Name() -> @exit { ... })
+    ( @munch($count:expr, $($parsed:tt)*)
+        @op( $opname:ident() -> @exit $body:block )
+        $($tail:tt)*
     ) => {
-        handler_fn!{
-            fn $name($args: Args) {
+        struct $opname;
 
-                $body
+        impl $opname {
+            tailspin!(@argfn fn exec(_args: Args) -> ExitCode {
+
+                #[inline(always)]
+                fn inner() -> ExitCode $body
+
+                return inner();
+            });
+        }
+
+        impl BytecodeOp for $opname {
+            const OPCODE: Ops = Ops::$opname;
+            fn get_handlers() -> Vec<Handler> {
+                vec![ Self::exec as Handler ]
             }
         }
+
+        tailspin!(@munch($count + 1usize, $($parsed)* $opname) $($tail)*);
     };
 
-    // Always Terminate
-    ($name:ident() -> ExitCode $body:block) => {
-        handler_fn!{
-            fn $name(args: Args) -> ExitCode {
-                let exitcode = $body;
-
-                args.state.regs[0] = args.r0;
-                args.state.regs[1] = args.r1;
-                args.state.regs[2] = args.r2;
-
-                return exitcode;
+    // Terminal muncher. Actually build the enum with all the collected ops
+    ( @munch($count:expr, $($parsed:tt)*)
+        @enum($ops:ident)
+    ) => {
+        $crate::paste! {
+            #[allow(non_camel_case_types)]
+            #[allow(dead_code)]
+            pub enum Ops {
+                $( $parsed ),*
             }
         }
+
+        static NUM_OPS: usize = $count;
     };
-}
-
-wrap_op!( op_add(a: u64, b: u64) -> u64 {
-    u64::wrapping_add(a, b)
-});
-
-wrap_op!( op_sub(a: u64, b: u64) -> u64 {
-    u64::wrapping_sub(a, b)
-});
-
-wrap_op!( op_exit() -> ExitCode {
-    println!("Exiting...");
-
-    ExitCode(0)
-});
-
-struct TwoReg;
-impl Mode for TwoReg {
-    fn exec2<F: FnOnce(u64, u64) -> u64>(f: F, args: &mut Args) {
-        args.r0 = f(args.r0, args.r2);
-    }
-}
-
-const OPS: [Handler; 4] = [
-    op_add::<-1, -1, -1>,
-    op_add::<-1, -1, 0>,
-    op_sub::<-1, -1, -1>,
-    op_exit,
-];
-
-pub fn run() -> u64{
-    let bytecode = [Op(0), Op(3)]; // add, exit
-    let consts = [0u8, 1u8, 4u8];
-    let pp = bytecode.as_ptr() as *const Op;
-    let cp = consts.as_ptr() as *const u8;
-
-    println!("Starting tailspin...");
-
-    let mut state = State {
-        regs: [0; 32],
-    };
-    state.regs[0] = 5;
-    state.regs[1] = 2;
-
-    let exit = start(pp, cp, &mut state);
-
-    println!("Exit code: {:?}", exit.0);
-    println!("R0: {:?}", state.regs[0]);
-    println!("R1: {:?}", state.regs[1]);
-
-    state.regs[4]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct State {
+        regs: [u64; 32],
+    }
+
+    tailspin!(
+        @state(State)
+
+        @op( Add(a: u64, b: u64) -> u64 {a.wrapping_add(b)})
+        //@op( Sub(a: u64, b: u64) -> u64 {a.wrapping_sub(b)})
+        @op( Exit() -> @exit {
+            println!("Exiting...");
+
+            ExitCode(0)
+        })
+    );
+
+    pub fn run() -> u64{
+        let bytecode = [
+            Op(Ops::Add as u32),
+            Op(Ops::Exit as u32)
+        ]; // add, exit
+        let consts = [0u8, 1u8, 4u8];
+        let interpreter = Interpreter::new();
+        let pp = bytecode.as_ptr() as *const Op;
+        let cp = consts.as_ptr() as *const u8;
+
+        println!("Starting tailspin...");
+        println!("pp: {:x}, cp: {:x}", pp as usize, cp as usize);
+
+        let mut state = State {
+            regs: [0; 32],
+        };
+        state.regs[0] = 5;
+        state.regs[1] = 2;
+
+        let exit = unsafe { interpreter.run(pp, cp, &mut state) };
+
+        println!("Exit code: {:?}", exit.0);
+        println!("R0: {:?}", state.regs[0]);
+        println!("R1: {:?}", state.regs[1]);
+
+        state.regs[4]
+    }
 
     #[test]
     fn test_tailcall() {
