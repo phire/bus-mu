@@ -3,6 +3,309 @@
 
 pub use paste::paste;
 
+
+pub struct Bytecode<Op> {
+    instructions: Vec<Op>,
+    consts: Vec<u8>,
+}
+
+
+pub trait IntoBytecode<Op> {
+    fn into_bytecode(self) -> InstructionPrototype<Op>;
+}
+
+#[derive(Copy, Clone)]
+struct RegRef {
+    index: u8,
+}
+
+impl RegRef {
+    pub fn new(index: u8) -> RegRef {
+        RegRef { index }
+    }
+}
+
+pub enum ArgValue {
+    Reg(u8),
+    Imm(u64),
+    Fixed(u8),
+}
+
+pub enum Dest {
+    None,
+    Reg(u8),
+    Fixed(u8),
+}
+
+pub struct InstructionPrototype<Op> {
+    op: Op,
+    effects: bool,
+    result: Dest,
+    args: [Option<ArgValue>; 3], // We (currently) support upto 3 arguments per bytecode op
+}
+
+impl<Op> IntoBytecode<Op> for InstructionPrototype<Op> {
+    fn into_bytecode(self) -> InstructionPrototype<Op> {
+        self
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct SSARef(Option<std::num::NonZeroU16>);
+
+impl SSARef {
+    fn none() -> Self {
+        SSARef(None)
+    }
+    fn new(index: u16) -> Self {
+        SSARef(std::num::NonZeroU16::new(index))
+    }
+
+    fn is_some(&self) -> bool {
+        self.0.is_some()
+    }
+
+    fn is_none(&self) -> bool {
+        self.0.is_none()
+    }
+
+    fn get(&self) -> u16 {
+        self.0.map(|v| v.get() as u16).unwrap_or(0)
+    }
+
+    fn or_insert_with<F>(&mut self, f: F) -> &Self
+    where
+        F: FnOnce() -> SSARef,
+    {
+        match self.0 {
+            Some(_) => self,
+            None => {
+                self.0 = f().0;
+                self
+            }
+        }
+    }
+}
+
+impl From<SSARef> for usize {
+    fn from(value: SSARef) -> Self {
+        value.0.map(|v| v.get() as usize).unwrap_or(0)
+    }
+}
+
+#[derive(Copy, Clone)]
+enum SSASource {
+    None,
+    RegRead(u8),
+    RegWrite(u8),
+    Fixed(u8),
+    Imm(u64),
+}
+
+
+#[derive(Copy, Clone)]
+enum SSAAloc {
+    None,
+    State(u8), // Direct to state struct
+    Reg0,
+    Reg1,
+    Reg2,
+}
+
+struct SSANode {
+    value: SSASource,
+    created: u16,
+    killed: u16,
+    read_count: u16,
+    last_read: u16,
+    alloc: SSAAloc,
+}
+
+impl Default for SSANode {
+    fn default() -> Self {
+        SSANode {
+            value: SSASource::None,
+            created: 0,
+            killed: 0,
+            read_count: 0,
+            last_read: 0,
+            alloc: SSAAloc::None
+        }
+    }
+}
+
+impl SSANode {
+    fn new(value: SSASource, idx: u16) -> SSANode {
+        let mut node = SSANode {
+            value,
+            created: idx,
+            ..Default::default()
+        };
+        match node.value {
+            SSASource::Fixed(0) => node.alloc = SSAAloc::Reg0,
+            SSASource::Fixed(1) => node.alloc = SSAAloc::Reg1,
+            SSASource::Fixed(2) => node.alloc = SSAAloc::Reg2,
+            _ => {}
+        }
+
+        node
+    }
+
+    fn mark_read(&mut self, idx: u16) -> &mut Self {
+        self.read_count += 1;
+        self.last_read = idx;
+        self
+    }
+
+    fn mark_dead(&mut self, idx: u16) -> &mut Self {
+        self.killed = idx;
+        self
+    }
+}
+
+pub struct SSAInstruction<Op> {
+    op: Op,
+    effects: bool,
+    result: SSARef,
+    args: [SSARef; 3],
+}
+
+pub struct BytecodeBuilder<Op> {
+    instructions: Vec<SSAInstruction<Op>>,
+    ssa: Vec<SSANode>,
+    reg_map: [SSARef; 256],
+    fixed: [SSARef; 3],
+}
+
+impl<Op> BytecodeBuilder<Op> {
+    pub fn new() -> BytecodeBuilder<Op> {
+        BytecodeBuilder {
+            instructions: Vec::new(),
+            ssa: vec![SSANode::default()], // Dummy node, so we can use 0 as null
+            reg_map: [SSARef::none(); 256],
+            fixed: [SSARef::none(); 3],
+        }
+    }
+
+    pub fn push<O: IntoBytecode<Op>>(&mut self, inst: O) -> Result<(), &'static str> {
+        let idx : u16 = self.instructions.len().try_into().map_err(|_| "Too many instructions")?;
+        let proto = inst.into_bytecode();
+
+        let args = {
+            let mut args = [SSARef::none(); 3];
+            for (i, arg) in proto.args.into_iter().enumerate() {
+                args[i] = match arg {
+                    None => { SSARef::none() }
+                    Some(ArgValue::Reg(r)) => {
+                        let ssa = self.reg_map[r as usize]
+                            .or_insert_with(|| {
+                                self.ssa.push(SSANode::new(SSASource::RegRead(r), idx));
+                                SSARef::new(self.ssa.len() as u16 - 1)
+                            }).clone();
+
+                        self.get_ssa_mut(ssa).mark_read(idx);
+                        ssa
+                    }
+                    Some(ArgValue::Imm(val)) => {
+                        // TODO: Should we be deduplicating immediates?
+                        let ssa = self.new_ssa(SSASource::Imm(val));
+                        self.get_ssa_mut(ssa)
+                            .mark_read(idx) // read immediately
+                            .mark_dead(idx); // Kill immediately (because we don't de-duplicate consts)
+
+                        ssa
+                    }
+                    Some(ArgValue::Fixed(r)) if r < 3 => {
+                        let ssa = self.fixed[r as usize];
+                        if ssa.is_none() { return Err("Fixed register read before write"); }
+                        self.get_ssa_mut(ssa).mark_read(idx);
+                        ssa
+                    }
+                    Some(ArgValue::Fixed(_)) => return Err("Fixed register out of range"),
+                }
+            }
+            args
+        };
+
+        let result = match proto.result {
+            Dest::None => SSARef::none(),
+            Dest::Reg(r) => {
+                self.overwrite(|slf| &mut slf.reg_map[r as usize], SSASource::RegWrite(r))
+            }
+            Dest::Fixed(r) if r < 3 => {
+                self.overwrite(|slf| &mut slf.fixed[r as usize], SSASource::Fixed(r))
+            }
+            Dest::Fixed(_) => return Err("Fixed register out of range"),
+        };
+
+        self.instructions.push(SSAInstruction { op: proto.op, effects: proto.effects, result, args });
+
+        Ok(())
+    }
+
+
+    fn overwrite<F: Fn(&mut Self) -> &mut SSARef>(&mut self, mapping: F, value: SSASource) -> SSARef {
+        let new_ssa = self.new_ssa(value);
+
+        let old_ssa = std::mem::replace(mapping(self), new_ssa.clone());
+        if old_ssa.is_some() {
+            // Overwrite a previous ssa.
+            let idx = self.instructions.len() as u16;
+            self.get_ssa_mut(old_ssa).mark_dead(idx);
+        }
+        new_ssa
+    }
+
+    fn new_ssa(&mut self, value: SSASource) -> SSARef {
+        self.ssa.push(SSANode::new(value, self.instructions.len() as u16));
+        SSARef::new(self.ssa.len() as u16 - 1)
+    }
+
+    fn get_ssa(&self, r: SSARef) -> &SSANode {
+        &self.ssa[usize::from(r)]
+    }
+
+    fn get_ssa_mut(&mut self, r: SSARef) -> &mut SSANode {
+        &mut self.ssa[usize::from(r)]
+    }
+
+    pub fn finish(self) -> Result<Bytecode<Op>, &'static str> {
+        //let mut active = [None; 3];
+        //let bytecode = Vec::new();
+        //let consts = Vec::new();
+
+        for (i, inst) in self.instructions.iter().enumerate() {
+            let mut args = [SSAAloc::None; 3];
+            // reads
+            for arg in inst.args.into_iter().filter(|x| x.is_some()) {
+                let ssa = self.get_ssa(arg);
+                match ssa.alloc {
+                    SSAAloc::None => {
+                        match ssa.value {
+                            SSASource::RegRead(0) => args[i] = SSAAloc::Reg0,
+                            SSASource::RegRead(1) => args[i] = SSAAloc::Reg1,
+                            SSASource::RegRead(2) => args[i] = SSAAloc::Reg2,
+                            _ => { todo!("?") }
+                        }
+                    }
+                    alloc => args[i] = alloc,
+                }
+            }
+
+            // let result = if inst.result.is_some() {
+
+            // }
+        }
+
+        unimplemented!();
+
+        // Bytecode {
+        //     instructions: bytecode,
+        //     consts,
+        // }
+    }
+}
+
 #[macro_export]
 macro_rules! tailspin {
     (
@@ -162,6 +465,8 @@ macro_rules! tailspin {
 
                 tailspin!(@dispatch args)
             });
+
+            //fn emit()
         }
 
         impl BytecodeOp for $opname {
@@ -231,6 +536,132 @@ macro_rules! tailspin {
                 [< $opname _Rn_R2_R0 >]
                 [< $opname _Rn_R2_R1 >]
                 [< $opname _Rn_R2_R2 >]
+            )
+            $($tail)*
+        );
+    };
+
+    // Munch binary, no result ops, with state - @op(Name($state: @state, $a: u64, $b: u64) { ... })
+    ( @munch($count:expr, $($parsed:tt)*)
+        @op($opname:ident ($state:ident : @state, $a:ident : $a_ty:tt, $b:ident : $b_ty:tt) $body:block)
+        $( $tail:tt )*
+    ) => {
+
+        struct $opname;
+
+        impl $opname {
+            tailspin!(@argfn fn exec2<const A: i32, const B: i32>(args: Args) -> ExitCode {
+
+                #[inline(always)]
+                fn inner($state: &mut StateType, $a: u64, $b: u64) $body
+
+                let $a = *args.get::<A>();
+                let $b = *args.get::<B>();
+
+                inner(args.state, $a, $b);
+
+                tailspin!(@dispatch args)
+            });
+        }
+
+        impl BytecodeOp for $opname {
+            const OPCODE: Ops = Ops::$opname;
+            fn get_handlers() -> Vec<Handler> {
+                vec![
+                    Self::exec2::<-1, -1> as Handler,
+                    Self::exec2::<0, 1> as Handler,
+                    Self::exec2::<0, 2> as Handler,
+                    Self::exec2::<1, 0> as Handler,
+                    Self::exec2::<1, 2> as Handler,
+                    Self::exec2::<2, 0> as Handler,
+                    Self::exec2::<2, 1> as Handler,
+                    Self::exec2::<-1, 0> as Handler,
+                    Self::exec2::<-1, 1> as Handler,
+                    Self::exec2::<-1, 2> as Handler,
+                    Self::exec2::<0, -1> as Handler,
+                    Self::exec2::<1, -1> as Handler,
+                    Self::exec2::<2, -1> as Handler,
+                ]
+            }
+        }
+
+        tailspin!(@munch($count + 13usize, $($parsed)*
+                $opname // Implicitly _RN_RN
+                [< $opname _R0_R1 >]
+                [< $opname _R0_R2 >]
+                [< $opname _R1_R0 >]
+                [< $opname _R1_R2 >]
+                [< $opname _R2_R0 >]
+                [< $opname _R2_R1 >]
+
+                [< $opname _Rn_R0 >]
+                [< $opname _Rn_R1 >]
+                [< $opname _Rn_R2 >]
+                [< $opname _R0_Rn >]
+                [< $opname _R1_Rn >]
+                [< $opname _R2_Rn >]
+            )
+            $($tail)*
+        );
+    };
+
+    // Munch unary op, with state - @op(Name($state:  @state, $a: u64) -> u64 { ... })
+    ( @munch($count:expr, $($parsed:tt)*)
+        @op($opname:ident ($state:ident : @state, $a:ident : $a_ty:tt) -> $ret:tt $body:block)
+        $( $tail:tt )*
+    ) => {
+        struct $opname;
+
+        impl $opname {
+            tailspin!(@argfn fn exec2<const A: i32, const DEST: i32>(args: Args) -> ExitCode {
+
+                #[inline(always)]
+                fn inner($state: &mut StateType, $a: u64) -> u64 $body
+
+                let $a = *args.get::<A>();
+
+                *args.get::<DEST>() = inner(args.state, $a);
+
+                tailspin!(@dispatch args)
+            });
+        }
+
+        impl BytecodeOp for $opname {
+            const OPCODE: Ops = Ops::$opname;
+            fn get_handlers() -> Vec<Handler> {
+                vec![
+                    Self::exec2::<-1, -1> as Handler,
+                    Self::exec2::<0, 1> as Handler,
+                    Self::exec2::<0, 2> as Handler,
+                    Self::exec2::<1, 0> as Handler,
+                    Self::exec2::<1, 2> as Handler,
+                    Self::exec2::<2, 0> as Handler,
+                    Self::exec2::<2, 1> as Handler,
+                    Self::exec2::<-1, 0> as Handler,
+                    Self::exec2::<-1, 1> as Handler,
+                    Self::exec2::<-1, 2> as Handler,
+                    Self::exec2::<0, -1> as Handler,
+                    Self::exec2::<1, -1> as Handler,
+                    Self::exec2::<2, -1> as Handler,
+                ]
+            }
+        }
+
+        tailspin!(@munch($count + 13usize, $($parsed)*
+                $opname // Implicitly _RN_RN
+                [< $opname _R0_R1 >]
+                [< $opname _R0_R2 >]
+                [< $opname _R1_R0 >]
+                [< $opname _R1_R2 >]
+                [< $opname _R2_R0 >]
+                [< $opname _R2_R1 >]
+
+                [< $opname _Rn_R0 >]
+                [< $opname _Rn_R1 >]
+                [< $opname _Rn_R2 >]
+                [< $opname _R0_Rn >]
+                [< $opname _R1_Rn >]
+                [< $opname _R2_Rn >]
             )
             $($tail)*
         );

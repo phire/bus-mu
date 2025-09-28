@@ -5,12 +5,22 @@ use tailspin::tailspin;
 
 struct State {
    regs: [u64; 32],
+   mem: Box<[u64]>,
 }
 
 tailspin! {
     @state(State)
 
     @op( Add(a: u64, b: u64) -> u64 {a.wrapping_add(b)})
+
+    @op( Store(state: @state, addr: u64, value: u64) {
+        state.mem[addr as usize] = value;
+    })
+
+    @op( Load(state: @state, addr: u64) -> u64 {
+        state.mem[addr as usize]
+    })
+
     @op( Exit() -> @exit {
         println!("Exiting...");
 
@@ -53,6 +63,8 @@ fn linked_list_rust(mem: &mut [u64], count: usize) {
 }
 
 fn linked_list_tailspin() {
+    //let mut bytecode = Bytecode::new();
+    //bytecode.push_op(Add.emit())
 
 }
 
