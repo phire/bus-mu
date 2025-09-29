@@ -1,0 +1,14 @@
+:root {
+    --bg-color: #4478B5;
+    --grid-color: #597fb5;
+    --text-color: #E1E2ED;
+}
+
+body {
+  background-size: 80px 80px;
+  background-color: var(--bg-color);
+  background-image:
+    linear-gradient(to right, var(--grid-color) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-color) 1px, transparent 1px);
+  color: var(--text-color);
+}

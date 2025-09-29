@@ -6,9 +6,9 @@ edition = "2024"
 [lib]
 
 [features]
-ui = ["egui"]
+#ui = ["egui"]
 
 [dependencies]
 modular-bitfield = { workspace = true }
-egui = { workspace = true, optional = true }
+#egui = { workspace = true, optional = true }
 common = { path = "../../common" }

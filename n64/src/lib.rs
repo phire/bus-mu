@@ -38,9 +38,9 @@ impl<GlobalOpts> common::EmulationCoreCli<GlobalOpts> for CoreN64
 where
     GlobalOpts: FromArgMatches + Args,
 {
-    fn parse_args(&self) -> (GlobalOpts, Box<dyn Any>)
+    fn parse_args(&self, args: Vec<String>) -> (GlobalOpts, Box<dyn Any>)
     {
-        let cli = Cli::<GlobalOpts>::parse();
+        let cli = Cli::<GlobalOpts>::parse_from(args);
         (cli.global_opts, Box::new(cli.n64_config))
     }
 }

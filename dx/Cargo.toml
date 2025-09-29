@@ -1,0 +1,15 @@
+[package]
+name = "dx"
+version.workspace = true
+edition = "2024"
+
+[lib]
+
+[features]
+default = ["desktop"]
+desktop = ["dioxus/desktop"]
+
+[dependencies]
+dioxus = { workspace = true }
+anyhow = { workspace = true }
+common = { path = "../common" }

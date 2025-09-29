@@ -4,7 +4,7 @@ members = [
     "common",
     "n64",
     "n64/vr4300",
-    "ui/",
+    #"ui/",
     "tailspin",
     "tailspin-toy",
 ]
@@ -20,26 +20,31 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["ui"]
-ui = [
-    "dep:ui",
-    "common/ui",
-    "n64/ui",
+default = ["dx"]
+# ui = [
+#     "dep:ui",
+#     "common/ui",
+#     "n64/ui",
+# ]
+dx = [
+    "dep:dx"
 ]
 
 [dependencies]
 common = { path = "common" }
 n64 = { path = "n64" }
-ui = { path = "ui", optional = true }
+#ui = { path = "ui", optional = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
+dx = { path = "dx", optional = true }
 
 [workspace.dependencies]
 modular-bitfield = { git = "https://github.com/phire/modular-bitfield.git", rev = "b922ff94" }
-eframe = "0.24"
-egui = "0.24"
+#eframe = "0.24"
+#egui = "0.24"
 anyhow = "1.0"
 clap = { version = "4.4", features = ["derive"] }
+dioxus = { git = "https://github.com/dioxuslabs/dioxus.git", tag = "v0.7.0-rc.0" }
 
 [profile.release]
 #lto = true

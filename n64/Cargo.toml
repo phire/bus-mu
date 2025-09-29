@@ -6,13 +6,13 @@ edition = "2024"
 [lib]
 
 [features]
-ui = ["egui", "common/ui", "actor_framework/ui", "vr4300/ui"]
+#ui = ["egui", "common/ui", "actor_framework/ui", "vr4300/ui"]
 
 [dependencies]
 actor_framework = { path = "../actor_framework" }
 vr4300 = { path = "vr4300" }
 common = { path = "../common" }
 anyhow = { workspace = true }
-egui = { workspace = true, optional = true }
+#egui = { workspace = true, optional = true }
 clap = { workspace = true }
 modular-bitfield =  { workspace = true }

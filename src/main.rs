@@ -15,20 +15,26 @@ fn main() -> Result<(), anyhow::Error> {
         get_core(*core)
     }).collect();
 
-    let core = FindCore::parse().core;
-    let (global_opts, config) = parse_args_with::<GlobalOpts<Cores>>(core);
+    let args = std::env::args().filter(|arg| !arg.is_empty()).collect::<Vec<_>>();
+
+    println!("{:?}", args);
+
+
+
+    let core = FindCore::parse_from(&args).core;
+    let (global_opts, config) = parse_args_with::<GlobalOpts<Cores>>(core, args);
 
     let core = global_opts.core.map(|c| get_core(c));
 
-    if global_opts.nogui || cfg!(not(feature = "ui")) {
+    if global_opts.nogui || cfg!(not(feature = "dx")) {
         if let Some(core) = core {
             run_no_ui(core, config, global_opts)
         } else {
             Err(anyhow::anyhow!("--nogui requires a core"))
         }
     } else {
-        #[cfg(feature = "ui")]
-        ui::run(core, config, all_cores)
+        #[cfg(feature = "dx")]
+        dx::run(core, config, all_cores)
     }
 }
 

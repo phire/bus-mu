@@ -48,7 +48,7 @@ where
 {
     //type Parser : clap::Parser;
 
-    fn parse_args(&self) -> (GlobalOpts, Box<dyn Any>);
+    fn parse_args(&self, args: Vec<String>) -> (GlobalOpts, Box<dyn Any>);
 
 }
 
