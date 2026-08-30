@@ -3,6 +3,11 @@ use std::any::Any;
 use common::EmulationCore;
 use dioxus::prelude::*;
 
+mod sheet;
+mod node;
+
+pub use sheet::Sheet;
+
 pub fn run(core: Option<&'static dyn EmulationCore>, config: Box<dyn Any>, cores: Vec<&'static dyn EmulationCore>) -> Result<(), anyhow::Error> {
     dioxus::launch(App);
     Ok(())
@@ -16,4 +21,10 @@ fn App() -> Element {
         document::Stylesheet { href: CSS }
         div { "Hello, World!" }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Point {
+    x: f32,
+    y: f32,
 }
