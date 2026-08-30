@@ -4,6 +4,8 @@ members = [
     "common",
     "n64",
     "n64/vr4300",
+    #"cube",
+    "cube/ppc750",
     #"ui/",
     "tailspin",
     "tailspin-toy",

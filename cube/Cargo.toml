@@ -1,0 +1,9 @@
+[package]
+name = "cube"
+version.workspace = true
+edition = "2024"
+
+# [lib]
+
+# [dependencies]
+# ppc750 = { path = "ppc750" }
