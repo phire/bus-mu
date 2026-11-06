@@ -46,7 +46,7 @@ modular-bitfield = { git = "https://github.com/phire/modular-bitfield.git", rev 
 #egui = "0.24"
 anyhow = "1.0"
 clap = { version = "4.4", features = ["derive"] }
-dioxus = { git = "https://github.com/dioxuslabs/dioxus.git", tag = "v0.7.0-rc.0" }
+dioxus = "0.7.10"
 
 [profile.release]
 #lto = true
