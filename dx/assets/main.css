@@ -1,14 +1,25 @@
 :root {
-    --bg-color: #4478B5;
-    --grid-color: #597fb5;
+    --bg-color: #4482B5;
+    --grid-color: #4f88bc;
     --text-color: #E1E2ED;
 }
 
 body {
-  background-size: 80px 80px;
   background-color: var(--bg-color);
+  margin: 0;
+  padding: 0;
+}
+
+.app {
+  display:block;
+  width: 100%;
+  height: 100vh;
+
+  padding: 4px;
+  background-size: 80px 80px;
+
   background-image:
-    linear-gradient(to right, var(--grid-color) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--grid-color) 1px, transparent 1px);
+    linear-gradient(to right, var(--grid-color) 2px, transparent 2px),
+    linear-gradient(to bottom, var(--grid-color) 2px, transparent 2px);
   color: var(--text-color);
 }
