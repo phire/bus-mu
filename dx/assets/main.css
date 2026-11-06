@@ -8,18 +8,28 @@ body {
   background-color: var(--bg-color);
   margin: 0;
   padding: 0;
+  overflow: hidden;
 }
 
-.app {
+#app {
   display:block;
   width: 100%;
   height: 100vh;
 
   padding: 4px;
-  background-size: 80px 80px;
 
+  color: var(--text-color);
+}
+
+#sheet {
+  transform-origin: 0 0;
+
+  min-width: 100%;
+  min-height: 100%;
+
+  background-size: 80px 80px;
   background-image:
     linear-gradient(to right, var(--grid-color) 2px, transparent 2px),
     linear-gradient(to bottom, var(--grid-color) 2px, transparent 2px);
-  color: var(--text-color);
 }
+

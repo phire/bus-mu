@@ -67,22 +67,46 @@ fn ZoomController(zoom: Signal<f64>) -> Element {
     }
 }
 
+fn apply_scroll(mut scroll: Signal<(f64, f64)>, evt: &dioxus::events::WheelEvent) {
+    if !evt.modifiers().is_empty() {
+        return;
+    }
+
+    let (x, y) = *scroll.read();
+    use dioxus_elements::geometry::*;
+    let delta = match evt.delta() {
+        WheelDelta::Pixels(PixelsVector3D{ x, y, .. }) => (x as f64, y as f64),
+        WheelDelta::Lines(LinesVector{ x, y, .. }) => (x as f64 * 16.0, y as f64 * 16.0),
+        WheelDelta::Pages(PagesVector{ x, y, .. }) => (x as f64 * 800.0, y as f64 * 600.0),
+    };
+
+    let x = (x + delta.0).clamp(-800.0, 1600.0);
+    let y = (y + delta.1).clamp(-600.0, 1200.0);
+
+    scroll.set((x, y));
+}
+
 #[component]
 fn App() -> Element {
     let zoom = use_signal(|| 1.0);
+    let scroll = use_signal(|| (0.0, 0.0));
 
     rsx! {
         document::Stylesheet { href: CSS }
         ZoomController { zoom }
         div {
-            class: "app",
             id: "app",
-            transform: "scale({*zoom.read()})",
-            ontouchmove: move |evt| {
-                println!("Touch move event: {:?}", evt);
+            onwheel: move |evt| {
+                apply_scroll(scroll, &evt);
             },
-            div { "Hello, World!" }
-            div { "Zoom: {*zoom.read()}" }
+
+            div {
+                id: "sheet",
+                transform: "scale({*zoom.read()}) translate({-scroll.read().0}px, {-scroll.read().1}px)",
+                div { "Hello, World!" }
+                div { "Zoom: {*zoom.read()}" }
+            }
+
         }
     }
 }
