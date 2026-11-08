@@ -42,6 +42,10 @@ impl Sheet {
         }
         state
     }
+
+    pub fn get_state(&self, id: &str) -> Option<Signal<ItemPos>> {
+        self.map.get(id).cloned()
+    }
 }
 
 #[component]

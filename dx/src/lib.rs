@@ -8,7 +8,7 @@ mod node;
 
 pub use sheet::Sheet;
 
-use crate::{node::Item, sheet::SheetComponent};
+use crate::{node::Item, node::Line, sheet::SheetComponent};
 
 pub fn run(core: Option<&'static dyn EmulationCore>, config: Box<dyn Any>, cores: Vec<&'static dyn EmulationCore>) -> Result<(), anyhow::Error> {
     dioxus::launch(App);
@@ -107,6 +107,9 @@ fn App() -> Element {
                 Item { id: "item1", "Item Content" }
                 Item { id: "item2", "Another Item" }
                 Item { id: "item3", "a third item" }
+                Line { from: "item1", to: "item2" }
+                Line { from: "item1", to: "item3" }
+                Line { from: "item2", to: "item3" }
             }
         }
     }
