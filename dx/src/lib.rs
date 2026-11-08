@@ -8,6 +8,8 @@ mod node;
 
 pub use sheet::Sheet;
 
+use crate::{node::Item, sheet::SheetComponent};
+
 pub fn run(core: Option<&'static dyn EmulationCore>, config: Box<dyn Any>, cores: Vec<&'static dyn EmulationCore>) -> Result<(), anyhow::Error> {
     dioxus::launch(App);
     Ok(())
@@ -99,20 +101,19 @@ fn App() -> Element {
             onwheel: move |evt| {
                 apply_scroll(scroll, &evt);
             },
+            div { "Zoom: {*zoom.read()}" }
 
-            div {
-                id: "sheet",
-                transform: "scale({*zoom.read()}) translate({-scroll.read().0}px, {-scroll.read().1}px)",
-                div { "Hello, World!" }
-                div { "Zoom: {*zoom.read()}" }
+            SheetComponent { transform: "scale({*zoom.read()}) translate({-scroll.read().0}px, {-scroll.read().1}px)",
+                Item { id: "item1", "Item Content" }
+                Item { id: "item2", "Another Item" }
+                Item { id: "item3", "a third item" }
             }
-
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Point {
-    x: f32,
-    y: f32,
+    x: f64,
+    y: f64,
 }
