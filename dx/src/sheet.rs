@@ -11,6 +11,7 @@ pub struct Sheet {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct ItemPos {
+    pub valid: bool,
     pub position: Point,
     pub size: Point,
 }
@@ -18,8 +19,19 @@ pub struct ItemPos {
 impl ItemPos {
     pub fn new(i: usize) -> Self {
         Self {
-            position: Point { x: (i * 110) as f64, y: 0.0 },
+            valid: true,
+            position: Point { x: (i * 110) as f64, y: (i * 110) as f64 },
             size: Point { x: 100.0, y: 100.0 },
+        }
+    }
+}
+
+impl Default for ItemPos {
+    fn default() -> Self {
+        Self {
+            valid: false,
+            position: Point { x: 0.0, y: 0.0 },
+            size: Point { x: 0.0, y: 0.0 },
         }
     }
 }
@@ -36,15 +48,38 @@ impl Sheet {
     pub fn make_state(&mut self, id: Option<String>) -> Signal<ItemPos> {
         let idx = self.count;
         self.count += 1;
-        let state = Signal::new_in_scope(ItemPos::new(idx), self.scope_id);
+        let state = ItemPos::new(idx);
         if let Some(id) = id {
-            self.map.insert(id, state.clone());
+            // If we have an id, allocate in sheet's scope and put it in the map
+            let mut state_sig = self.get_state_entry(id.clone());
+            *state_sig.write() = state;
+            state_sig
+
+        } else {
+            // Otherwise, just return a local signal
+            Signal::new(state)
         }
-        state
     }
 
-    pub fn get_state(&self, id: &str) -> Option<Signal<ItemPos>> {
-        self.map.get(id).cloned()
+    /// Get item state for an id. Creates a placeholder if it doesn't exist yet.
+    fn get_state_entry(&mut self, id: String) -> Signal<ItemPos> {
+        self.map
+            .entry(id)
+            .or_insert_with(|| {
+                // Insert with parents scope, so it's siblings can access it
+                Signal::new_in_scope(ItemPos::default(), self.scope_id)
+            })
+            .clone()
+    }
+
+    pub fn read_state(&mut self, id: String) -> Option<ItemPos> {
+        let sig = self.get_state_entry(id);
+        let state = sig.read();
+        if state.valid {
+            Some(*state)
+        } else {
+            None
+        }
     }
 }
 

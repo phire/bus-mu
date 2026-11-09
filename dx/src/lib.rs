@@ -104,12 +104,14 @@ fn App() -> Element {
             div { "Zoom: {*zoom.read()}" }
 
             SheetComponent { transform: "scale({*zoom.read()}) translate({-scroll.read().0}px, {-scroll.read().1}px)",
-                Item { id: "item1", "Item Content" }
-                Item { id: "item2", "Another Item" }
-                Item { id: "item3", "a third item" }
+
                 Line { from: "item1", to: "item2" }
                 Line { from: "item1", to: "item3" }
                 Line { from: "item2", to: "item3" }
+                Item { id: "item1", "Item Content" }
+                Item { id: "item2", "Another Item" }
+                Item { id: "item3", "a third item" }
+                Item { "item without a name" }
             }
         }
     }

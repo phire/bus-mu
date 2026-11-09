@@ -23,7 +23,7 @@ pub fn Item(
           });
         sheet.write().make_state(id)
     });
-    let sheet::ItemPos { position: pos, size } = *item_state.read();
+    let sheet::ItemPos { position: pos, size, .. } = *item_state.read();
 
     rsx! {
         div {
@@ -68,9 +68,9 @@ pub fn Line(
     #[props(extends = GlobalAttributes)]
     attributes: Vec<Attribute>
 ) -> Element {
-    let sheet = use_context::<Signal<Sheet>>();
-    let to = sheet.read().get_state(&to).map(|s| s.read().position);
-    let from = sheet.read().get_state(&from).map(|s| s.read().position);
+    let mut sheet = use_context::<Signal<Sheet>>();
+    let to = sheet.write().read_state(to).map(|s| s.position);
+    let from = sheet.write().read_state(from).map(|s| s.position);
 
     rsx! {
         if let (Some(from), Some(to)) = (from, to) {
