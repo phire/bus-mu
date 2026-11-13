@@ -5,6 +5,7 @@ use dioxus::{document::eval, prelude::*};
 
 mod sheet;
 mod node;
+mod regfile;
 
 pub use sheet::Sheet;
 
@@ -88,10 +89,16 @@ fn apply_scroll(mut scroll: Signal<(f64, f64)>, evt: &dioxus::events::WheelEvent
     scroll.set((x, y));
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct ViewContext {
+    zoom: Signal<f64>,
+}
+
 #[component]
 fn App() -> Element {
     let zoom = use_signal(|| 1.0);
     let scroll = use_signal(|| (0.0, 0.0));
+    use_context_provider(|| ViewContext{ zoom });
 
     rsx! {
         document::Stylesheet { href: CSS }
@@ -105,13 +112,10 @@ fn App() -> Element {
 
             SheetComponent { transform: "scale({*zoom.read()}) translate({-scroll.read().0}px, {-scroll.read().1}px)",
 
-                Line { from: "item1", to: "item2" }
-                Line { from: "item1", to: "item3" }
-                Line { from: "item2", to: "item3" }
-                Item { id: "item1", "Item Content" }
-                Item { id: "item2", "Another Item" }
-                Item { id: "item3", "a third item" }
-                Item { "item without a name" }
+                // Line { from: "item1", to: "item2" }
+                // Item { id: "item1", "Item Content" }
+                // Item { id: "item2", "Another Item" }
+                regfile::RegisterFile {}
             }
         }
     }
