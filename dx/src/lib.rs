@@ -20,7 +20,7 @@ pub fn run(core: Option<&'static dyn EmulationCore>, config: Box<dyn Any>, cores
 }
 
 const CSS: Asset = asset!("assets/main.css");
-const FONT: Asset = asset!("assets/Monaspace Argon Var.woff2");
+const _: Asset = asset!("assets/Monaspace Argon Var.woff2", manganis::AssetOptions::builder().with_hash_suffix(false));
 
 static HOOK_ZOOM_JS: &str = "
     let zoom_value = document.getElementById('_zoom_value');
@@ -155,13 +155,11 @@ impl ViewContext {
 #[component]
 fn App() -> Element {
     let mut view = use_signal(|| ViewContext::new());
-
     use_context_provider(|| view);
     let zoom = view.read().zoom.read().clone();
     let scroll = view.read().scroll.read().clone();
 
     rsx! {
-        document::Style { {format!(r"@font-face {{ font-family: 'monaspace'; src: url('{}'); }}", FONT)} }
         document::Stylesheet { href: CSS }
         ZoomController { view }
         div {

@@ -1,3 +1,7 @@
+@font-face {
+   font-family: 'monaspace';
+   src: url('Monaspace Argon Var.woff2');
+}
 
 :root {
     --bg-color: #4482B5;
