@@ -20,6 +20,7 @@ pub fn run(core: Option<&'static dyn EmulationCore>, config: Box<dyn Any>, cores
 }
 
 const CSS: Asset = asset!("assets/main.css");
+const FONT: Asset = asset!("assets/Monaspace Argon Var.woff2");
 
 static HOOK_ZOOM_JS: &str = "
     let zoom_value = document.getElementById('_zoom_value');
@@ -160,6 +161,7 @@ fn App() -> Element {
     let scroll = view.read().scroll.read().clone();
 
     rsx! {
+        document::Style { {format!(r"@font-face {{ font-family: 'monaspace'; src: url('{}'); }}", FONT)} }
         document::Stylesheet { href: CSS }
         ZoomController { view }
         div {

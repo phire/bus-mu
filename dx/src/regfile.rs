@@ -4,10 +4,12 @@ use crate::ViewContext;
 
 #[component]
 pub fn Register(num: u32, show_text: bool) -> Element {
+    let val = (num | num << 8) as u64;
+    let val = val | val << 16 | val << 32 | val << 48;
     rsx! {
         div { class: "reg",
             if show_text {
-                "{0:016}"
+                "{val:016X}"
             }
         }
     }

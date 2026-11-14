@@ -1,3 +1,4 @@
+
 :root {
     --bg-color: #4482B5;
     --grid-color: #4f88bc;
@@ -9,6 +10,7 @@ body {
   margin: 0;
   padding: 0;
   overflow: hidden;
+  font-family: 'monaspace', monospace;
 }
 
 #app {
@@ -46,7 +48,9 @@ body {
 
   .reg {
     width: 20px;
-    height: 136px;
+    height: 170px;
+    /* letter-spacing: -0.05em; */
+    font-weight: 500;
     background-color: var(--text-color);
     border-radius: 6px;
     border: 0px solid var(--text-color);
@@ -59,5 +63,6 @@ body {
 
   .zero {
     background: none;
+    font-weight: bold;
   }
 }
