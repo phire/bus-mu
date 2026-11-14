@@ -1,7 +1,7 @@
 use std::any::Any;
 
 use common::EmulationCore;
-use dioxus::{document::eval, prelude::*};
+use dioxus::{desktop::Config, document::eval, html::geometry::ClientPoint, prelude::*};
 
 mod sheet;
 mod node;
@@ -12,7 +12,10 @@ pub use sheet::Sheet;
 use crate::{node::Item, node::Line, sheet::SheetComponent};
 
 pub fn run(core: Option<&'static dyn EmulationCore>, config: Box<dyn Any>, cores: Vec<&'static dyn EmulationCore>) -> Result<(), anyhow::Error> {
-    dioxus::launch(App);
+    dioxus::LaunchBuilder::new()
+        .with_cfg(Config::new()
+            .with_disable_context_menu(true))
+        .launch(App);
     Ok(())
 }
 
@@ -39,8 +42,11 @@ static HOOK_ZOOM_JS: &str = "
 ";
 
 #[component]
-fn ZoomController(zoom: Signal<f64>) -> Element {
+fn ZoomController(view: Signal<ViewContext>) -> Element {
     let mut zoom_initial = use_signal(|| 1.0);
+    let mut zoom = view.read().zoom.clone();
+
+
     rsx! {
         div {
             // Hack to allow us to hook gesture events from safari
@@ -62,6 +68,7 @@ fn ZoomController(zoom: Signal<f64>) -> Element {
                 id: "_zoom_start",
                 oninput: move |_| {
                     zoom_initial.set(*zoom.read());
+                    view.write().touchpad = true;
                 },
             }
             input { r#type: "button", id: "_zoom_end" }
@@ -70,47 +77,104 @@ fn ZoomController(zoom: Signal<f64>) -> Element {
     }
 }
 
-fn apply_scroll(mut scroll: Signal<(f64, f64)>, evt: &dioxus::events::WheelEvent) {
-    if !evt.modifiers().is_empty() {
-        return;
-    }
-
-    let (x, y) = *scroll.read();
-    use dioxus_elements::geometry::*;
-    let delta = match evt.delta() {
-        WheelDelta::Pixels(PixelsVector3D{ x, y, .. }) => (x as f64, y as f64),
-        WheelDelta::Lines(LinesVector{ x, y, .. }) => (x as f64 * 16.0, y as f64 * 16.0),
-        WheelDelta::Pages(PagesVector{ x, y, .. }) => (x as f64 * 800.0, y as f64 * 600.0),
-    };
-
-    let x = (x + delta.0).clamp(-800.0, 1600.0);
-    let y = (y + delta.1).clamp(-600.0, 1200.0);
-
-    scroll.set((x, y));
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct ViewContext {
-    zoom: Signal<f64>,
+    pub zoom: Signal<f64>,
+    pub scroll: Signal<(f64, f64)>,
+    drag_start: Option<(ClientPoint, (f64, f64))>,
+    touchpad: bool,
+}
+
+impl ViewContext {
+    fn new() -> Self {
+        Self {
+            zoom: Signal::new(1.0),
+            scroll: Signal::new((0.0, 0.0)),
+            drag_start: None,
+            touchpad: false,
+        }
+    }
+
+    fn mousedown(&mut self, evt: &dioxus::events::MouseEvent) {
+        if evt.trigger_button()
+            == Some(dioxus_elements::input_data::MouseButton::Secondary)
+        {
+            self.drag_start = Some((evt.data.coordinates().client(), *self.scroll.read()));
+        }
+    }
+
+    fn mouseup(&mut self, evt: &dioxus::events::MouseEvent) {
+        if evt.trigger_button()
+            == Some(dioxus_elements::input_data::MouseButton::Secondary)
+        {
+            self.drag_start = None;
+        }
+    }
+
+    fn mousemove(&mut self, evt: &dioxus::events::MouseEvent) {
+        if let Some((start, scroll_at_start)) = self.drag_start {
+            evt.prevent_default();
+            evt.stop_propagation();
+            let delta = start - evt.data.coordinates().client();
+            let (x, y) = scroll_at_start;
+            let x = (x + delta.x).clamp(-800.0, 1600.0);
+            let y = (y + delta.y).clamp(-600.0, 1200.0);
+            self.scroll.set((x, y));
+        }
+    }
+
+    fn wheel(&mut self, evt: &dioxus::events::WheelEvent) {
+        if evt.modifiers().ctrl() {
+            let y = match evt.delta() {
+                WheelDelta::Pixels(PixelsVector3D{ y, .. }) => y as f64,
+                WheelDelta::Lines(LinesVector{ y, .. }) => y as f64 * 16.0,
+                WheelDelta::Pages(PagesVector{ y, .. }) => y as f64 * 600.0,
+            };
+            let zoom = (*self.zoom.peek() * (1.0 - y / 300.0)).clamp(0.33, 4.0);
+            self.zoom.set(zoom);
+        } else if !evt.modifiers().is_empty() {
+            return;
+        }
+
+        let (x, y) = *self.scroll.read();
+        use dioxus_elements::geometry::*;
+        let delta = match evt.delta() {
+            WheelDelta::Pixels(PixelsVector3D{ x, y, .. }) => (x as f64, y as f64),
+            WheelDelta::Lines(LinesVector{ x, y, .. }) => (x as f64 * 16.0, y as f64 * 16.0),
+            WheelDelta::Pages(PagesVector{ x, y, .. }) => (x as f64 * 800.0, y as f64 * 600.0),
+        };
+
+        let x = (x + delta.0).clamp(-800.0, 1600.0);
+        let y = (y + delta.1).clamp(-600.0, 1200.0);
+
+        self.scroll.set((x, y));
+    }
 }
 
 #[component]
 fn App() -> Element {
-    let zoom = use_signal(|| 1.0);
-    let scroll = use_signal(|| (0.0, 0.0));
-    use_context_provider(|| ViewContext{ zoom });
+    let mut view = use_signal(|| ViewContext::new());
+
+    use_context_provider(|| view);
+    let zoom = view.read().zoom.read().clone();
+    let scroll = view.read().scroll.read().clone();
 
     rsx! {
         document::Stylesheet { href: CSS }
-        ZoomController { zoom }
+        ZoomController { view }
         div {
             id: "app",
             onwheel: move |evt| {
-                apply_scroll(scroll, &evt);
+                view.write().wheel(&evt);
             },
-            div { "Zoom: {*zoom.read()}" }
+            onmousemove: move |evt| {
+                view.write().mousemove(&evt);
+            },
+            onmousedown: move |evt| view.write().mousedown(&evt),
+            onmouseup: move |evt| view.write().mouseup(&evt),
+            div { "Zoom: {zoom}" }
 
-            SheetComponent { transform: "scale({*zoom.read()}) translate({-scroll.read().0}px, {-scroll.read().1}px)",
+            SheetComponent { transform: "scale({zoom}) translate({scroll.0}px, {scroll.1}px)",
 
                 // Line { from: "item1", to: "item2" }
                 // Item { id: "item1", "Item Content" }

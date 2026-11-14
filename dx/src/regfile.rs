@@ -15,7 +15,7 @@ pub fn Register(num: u32, show_text: bool) -> Element {
 
 #[component]
 pub fn RegisterFile() -> Element {
-    let zoom = *use_context::<ViewContext>().zoom.read();
+    let zoom = *use_context::<Signal<ViewContext>>().peek().zoom.read();
     let mix = ((zoom - 0.4) * 50.0 * (zoom - 0.4) * 50.0) as i32;
     let fading = mix >= 0 && mix < 100;
     let show_text = mix >= 0;
