@@ -46,7 +46,6 @@ fn ZoomController(view: Signal<ViewContext>) -> Element {
     let mut zoom_initial = use_signal(|| 1.0);
     let mut zoom = view.read().zoom.clone();
 
-
     rsx! {
         div {
             // Hack to allow us to hook gesture events from safari
@@ -115,7 +114,7 @@ impl ViewContext {
         if let Some((start, scroll_at_start)) = self.drag_start {
             evt.prevent_default();
             evt.stop_propagation();
-            let delta = start - evt.data.coordinates().client();
+            let delta = (evt.data.coordinates().client() - start) / *self.zoom.peek();
             let (x, y) = scroll_at_start;
             let x = (x + delta.x).clamp(-800.0, 1600.0);
             let y = (y + delta.y).clamp(-600.0, 1200.0);
@@ -124,19 +123,20 @@ impl ViewContext {
     }
 
     fn wheel(&mut self, evt: &dioxus::events::WheelEvent) {
+        let zoom = *self.zoom.peek();
         if evt.modifiers().ctrl() {
             let y = match evt.delta() {
                 WheelDelta::Pixels(PixelsVector3D{ y, .. }) => y as f64,
                 WheelDelta::Lines(LinesVector{ y, .. }) => y as f64 * 16.0,
                 WheelDelta::Pages(PagesVector{ y, .. }) => y as f64 * 600.0,
             };
-            let zoom = (*self.zoom.peek() * (1.0 - y / 300.0)).clamp(0.33, 4.0);
+            let zoom = (zoom * (1.0 - y / 300.0)).clamp(0.33, 4.0);
             self.zoom.set(zoom);
         } else if !evt.modifiers().is_empty() {
             return;
         }
 
-        let (x, y) = *self.scroll.read();
+        let (x, y) = *self.scroll.peek();
         use dioxus_elements::geometry::*;
         let delta = match evt.delta() {
             WheelDelta::Pixels(PixelsVector3D{ x, y, .. }) => (x as f64, y as f64),
@@ -144,8 +144,8 @@ impl ViewContext {
             WheelDelta::Pages(PagesVector{ x, y, .. }) => (x as f64 * 800.0, y as f64 * 600.0),
         };
 
-        let x = (x + delta.0).clamp(-800.0, 1600.0);
-        let y = (y + delta.1).clamp(-600.0, 1200.0);
+        let x = (x + delta.0 / zoom).clamp(-800.0, 1600.0);
+        let y = (y + delta.1 / zoom).clamp(-600.0, 1200.0);
 
         self.scroll.set((x, y));
     }
