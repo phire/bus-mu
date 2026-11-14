@@ -145,8 +145,8 @@ impl ViewContext {
             WheelDelta::Pages(PagesVector{ x, y, .. }) => (x as f64 * 800.0, y as f64 * 600.0),
         };
 
-        let x = (x + delta.0 / zoom).clamp(-800.0, 1600.0);
-        let y = (y + delta.1 / zoom).clamp(-600.0, 1200.0);
+        let x = (x - delta.0 / zoom).clamp(-800.0, 1600.0);
+        let y = (y - delta.1 / zoom).clamp(-600.0, 1200.0);
 
         self.scroll.set((x, y));
     }
