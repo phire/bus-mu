@@ -1,4 +1,5 @@
-use std::{sync::mpsc, any::Any};
+use std::{any::Any, sync::Arc};
+use tokio::sync::mpsc;
 
 use n64::CoreN64;
 use common::{register_cores, cli::GlobalOpts};
@@ -38,10 +39,10 @@ fn main() -> Result<(), anyhow::Error> {
     }
 }
 
-fn run_no_ui(core: &dyn common::EmulationCore, config: Box<dyn Any>, _opts: GlobalOpts::<Cores>) -> Result<(), anyhow::Error> {
+fn run_no_ui(core: &dyn common::EmulationCore, config: Arc<dyn Any>, _opts: GlobalOpts::<Cores>) -> Result<(), anyhow::Error> {
     let mut instance = core.new_sync(config)?;
-    let (_tx_control, rx_control) = mpsc::channel::<common::ControlMessage>();
-    let (tx_update, _rx_update) = mpsc::sync_channel::<common::UpdateMessage>(1);
+    let (_tx_control, mut rx_control) = mpsc::channel::<common::ControlMessage>(1);
+    let (tx_update, _rx_update) = mpsc::channel::<common::UpdateMessage>(1);
 
-    instance.run(&rx_control, tx_update)
+    instance.run(&mut rx_control, tx_update)
 }

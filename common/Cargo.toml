@@ -7,8 +7,11 @@ edition = "2024"
 
 [features]
 #ui = ["egui"]
+dx = ["dioxus"]
 
 [dependencies]
 anyhow = { workspace = true }
 #egui = { workspace = true, optional = true }
+dioxus = { workspace = true, optional = true }
 clap = { workspace = true }
+tokio = { workspace = true }

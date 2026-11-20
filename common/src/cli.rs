@@ -55,7 +55,7 @@ macro_rules! register_cores {
         /// Returns the global options and per-core options
         ///
         /// If Core is None, returns only the global options
-        fn parse_args_with<GlobalOpts>(core: Option<Cores>, args: Vec<String>) -> (GlobalOpts, Box<dyn std::any::Any>)
+        fn parse_args_with<GlobalOpts>(core: Option<Cores>, args: Vec<String>) -> (GlobalOpts, std::sync::Arc<dyn std::any::Any + Send + Sync>)
         where
             GlobalOpts: clap::FromArgMatches + clap::Args,
         {
@@ -70,7 +70,7 @@ macro_rules! register_cores {
             } else {
                 let cli = GlobalOpts::augment_args(clap::Command::new(""));
 
-                (GlobalOpts::from_arg_matches(&cli.get_matches_from(args)).unwrap(), Box::new(()))
+                (GlobalOpts::from_arg_matches(&cli.get_matches_from(args)).unwrap(), std::sync::Arc::new(()))
             }
         }
 

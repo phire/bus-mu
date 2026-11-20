@@ -7,7 +7,7 @@ pub mod vi;
 mod c_bus;
 mod d_bus;
 
-use std::{path::PathBuf, any::Any};
+use std::{any::Any, path::PathBuf, sync::Arc};
 
 pub use actors::N64Actors;
 use clap::{Parser, FromArgMatches, Args};
@@ -18,9 +18,11 @@ impl common::EmulationCore for CoreN64 {
     fn name(&self) -> &'static str { "Nintendo 64" }
     fn short_name(&self) -> &'static str { "n64" }
 
-    fn new(&self, config: Box<dyn Any>) -> Result<Box<dyn common::Instance + Send>, anyhow::Error> {
-        let config = config.downcast::<N64Config>().unwrap();
-        Ok(Box::new(actor_framework::Instance::<N64Actors>::new(*config)?))
+    fn new(&self, config: Arc<dyn Any>) -> Result<Box<dyn common::Instance + Send>, anyhow::Error> {
+        let Some(config)  = config.downcast_ref::<N64Config>() else {
+            anyhow::bail!("Config missing");
+        };
+        Ok(Box::new(actor_framework::Instance::<N64Actors>::new(config.clone())?))
     }
 
     #[cfg(feature = "ui")]
@@ -32,16 +34,27 @@ impl common::EmulationCore for CoreN64 {
         let cpu_core = &mut instance.actor::<CpuActor>().cpu_core;
         cpu_core.ui(ui);
     }
+
+    #[cfg(feature = "dx")]
+    fn ui(&self, instance: Option<&dyn common::Instance>) -> dioxus::core::Element {
+        use dioxus::prelude::*;
+
+        //let instance = instance.as_any().downcast_mut::<actor_framework::Instance<N64Actors>>().unwrap();
+
+        rsx! {
+            div { "N64 Core UI" }
+        }
+    }
 }
 
 impl<GlobalOpts> common::EmulationCoreCli<GlobalOpts> for CoreN64
 where
     GlobalOpts: FromArgMatches + Args,
 {
-    fn parse_args(&self, args: Vec<String>) -> (GlobalOpts, Box<dyn Any>)
+    fn parse_args(&self, args: Vec<String>) -> (GlobalOpts, Arc<dyn Any + Send + Sync>)
     {
         let cli = Cli::<GlobalOpts>::parse_from(args);
-        (cli.global_opts, Box::new(cli.n64_config))
+        (cli.global_opts, Arc::new(cli.n64_config))
     }
 }
 

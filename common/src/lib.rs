@@ -1,4 +1,10 @@
-use std::{sync::mpsc::{self, Receiver, SyncSender}, any::Any};
+use std::{any::Any, cell::RefCell, rc::Rc, sync::Arc};
+
+#[cfg(feature = "dx")]
+use dioxus::core::Element;
+
+type Sender<T> = tokio::sync::mpsc::Sender<T>;
+type Receiver<T> = tokio::sync::mpsc::Receiver<T>;
 
 pub mod cli;
 pub mod util;
@@ -11,18 +17,18 @@ pub trait EmulationCore: Sync + Send {
     fn short_name(&self) -> &'static str;
 
     // Create an instance of the core
-    fn new(&self, config: Box<dyn Any>) -> Result<Box<dyn Instance + Send>, anyhow::Error>;
+    fn new(&self, config: Arc<dyn Any>) -> Result<Box<dyn Instance + Send>, anyhow::Error>;
 
     /// Create a single-threaded instance of the core.
     /// Override the default implementation if your core doesn't implement Send
-    fn new_sync(&self, config: Box<dyn Any>) -> Result<Box<dyn Instance>, anyhow::Error> {
+    fn new_sync(&self, config: Arc<dyn Any>) -> Result<Box<dyn Instance>, anyhow::Error> {
         Ok(self.new(config)?)
     }
 
     /// Create a multi-threaded instance of the core.
     /// The default implementation calls `new()` and wraps it with `ThreadAdapter`
-    fn new_threaded(&self, config: Box<dyn Any>) -> Result<Box<dyn ThreadedInstance>, anyhow::Error> {
-        Ok(Box::new(ThreadAdapter::new(self.new(config)?)?))
+    fn new_threaded(&self, config: Arc<dyn Any>) -> Result<(Rc<RefCell<ThreadAdapter>>, ThreadUpdates), anyhow::Error> {
+        ThreadAdapter::new(self.new(config)?)
     }
 
     /// Called while running to draw the core's UI
@@ -40,6 +46,9 @@ pub trait EmulationCore: Sync + Send {
         let _ = instance;
         self.ui(ui);
     }
+
+    #[cfg(feature = "dx")]
+    fn ui(&self, instance: Option<&dyn Instance>) -> Element;
 }
 
 pub trait EmulationCoreCli<GlobalOpts>
@@ -48,7 +57,7 @@ where
 {
     //type Parser : clap::Parser;
 
-    fn parse_args(&self, args: Vec<String>) -> (GlobalOpts, Box<dyn Any>);
+    fn parse_args(&self, args: Vec<String>) -> (GlobalOpts, Arc<dyn Any + Sync + Send>);
 
 }
 
@@ -58,6 +67,12 @@ pub enum UpdateMessage {
     Vsync,
     /// The instance has finished syncing with the UI thread
     UiSynced,
+    /// The instance has started running
+    Running,
+    /// The instance has paused
+    Paused(Box<dyn Instance>),
+    /// The instance has encountered an error
+    Error(anyhow::Error, Box<dyn Instance>),
 }
 
 /// Messages sent from the UI thread when the core instance is running
@@ -72,11 +87,11 @@ pub enum ControlMessage {
 }
 
 /// Synchronous instance of an emulator core
-pub trait Instance {
+pub trait Instance: Send {
     fn run(
         &mut self,
-        control_rx: &mpsc::Receiver<ControlMessage>,
-        update: mpsc::SyncSender<UpdateMessage>,
+        control_rx: &mut Receiver<ControlMessage>,
+        update: Sender<UpdateMessage>,
     ) -> Result<(), anyhow::Error>;
 
     fn as_any(&mut self) -> &mut dyn std::any::Any;
@@ -93,118 +108,124 @@ pub enum Status {
     Error,
 }
 
-// Asynchronous instance of an emulator core
-pub trait ThreadedInstance {
-    /// Starts the core (non-blocking)
-    fn start(&mut self) -> Result<(), anyhow::Error>;
-    /// Pauses the core (blocks until paused)
-    fn pause(&mut self) -> Result<(), anyhow::Error>;
-    /// Draw the UI
-    #[cfg(feature = "ui")]
-    fn ui(&self, core: &dyn EmulationCore, ui: &mut egui::Ui);
-    /// Draw the paused version of the UI
-    #[cfg(feature = "ui")]
-    fn paused_ui(&mut self, core: &dyn EmulationCore, ui: &mut egui::Ui);
-
-    /// Get the current status of the instance
-    fn status(&self) -> Status;
-}
-
 /// Takes a raw synchronous Instance and wraps it in a thread
 ///
 /// The instance gets moved to the thread when running and then back to the parent thread when paused.
 /// This allows the UI code to have full access to the instance while paused without crossing thread
 /// boundaries.
 pub struct ThreadAdapter {
-    instance: Option<Box<dyn Instance + Send>>,
-    tx_control: SyncSender<ControlMessage>,
-    rx_update: Receiver<UpdateMessage>,
-    tx_instance: SyncSender<Box<dyn Instance + Send>>,
-    rx_instance_return: Receiver<Option<Box<dyn Instance + Send>>>,
+    instance: Option<Box<dyn Instance>>,
+    tx_control: Sender<ControlMessage>,
+    tx_instance: Sender<Box<dyn Instance>>,
     join: Option<std::thread::JoinHandle<Result<(), anyhow::Error>>>,
 }
 
+pub struct ThreadUpdates {
+    rx_update: Receiver<UpdateMessage>,
+    adapter: Rc<RefCell<ThreadAdapter>>,
+}
+
+impl ThreadUpdates {
+    pub async fn recv_update(&mut self) -> Result<(), anyhow::Error> {
+        match self.rx_update.recv().await {
+            Some(UpdateMessage::Paused(instance)) => {
+                println!("Received paused update from thread.");
+                self.adapter.borrow_mut().instance = Some(instance);
+            }
+            Some(UpdateMessage::Error(err, instance)) => {
+                self.adapter.borrow_mut().instance = Some(instance);
+                self.adapter.borrow_mut().exit()?;
+                return Err(err);
+            }
+            None => return Err(anyhow::anyhow!("Channel closed")),
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 impl ThreadAdapter {
-    pub fn new(instance: Box<dyn Instance + Send>) -> Result<Self, anyhow::Error> {
+    pub fn new(instance: Box<dyn Instance>) -> Result<(Rc<RefCell<Self>>, ThreadUpdates), anyhow::Error> {
+        use tokio::sync::mpsc::channel;
         // Create all our channels
-        let (tx_control, rx_control) = mpsc::sync_channel::<ControlMessage>(1);
-        let (tx_update, rx_update) = mpsc::sync_channel::<UpdateMessage>(1);
-        let (tx_instance, rx_instance) = mpsc::sync_channel::<Box<dyn Instance + Send>>(1);
-        let (tx_instance_return, rx_instance_return) =
-            mpsc::sync_channel::<Option<Box<dyn Instance + Send>>>(1);
+        let (tx_control, rx_control) = channel::<ControlMessage>(1);
+        let (tx_update, rx_update) = channel::<UpdateMessage>(1);
+        let (tx_instance, rx_instance) = channel::<Box<dyn Instance>>(1);
 
         // Spawn the thread now.
         let join = std::thread::spawn(move || {
-            Self::thread_main(rx_instance, tx_instance_return, rx_control, tx_update)
+            Self::thread_main(rx_instance, rx_control, tx_update)
         });
 
-        Ok(Self {
+        let adapter = std::rc::Rc::new(RefCell::new(Self {
             instance: Some(instance),
             tx_control,
-            rx_update,
             tx_instance,
-            rx_instance_return,
             join: Some(join),
-        })
+        }));
+
+        let updates = ThreadUpdates {
+            rx_update,
+            adapter: adapter.clone(),
+        };
+
+        Ok((adapter, updates))
     }
 
     fn thread_main<'b>(
-        rx_instance: Receiver<Box<dyn Instance + Send>>,
-        tx_instance: SyncSender<Option<Box<dyn Instance + Send>>>,
-        rx_control: Receiver<ControlMessage>,
-        tx_update: SyncSender<UpdateMessage>,
+        mut rx_instance: Receiver<Box<dyn Instance>>,
+        mut rx_control: Receiver<ControlMessage>,
+        tx_update: Sender<UpdateMessage>,
     ) -> Result<(), anyhow::Error> {
         // We don't want to pay the overhead of starting a thread every time we unpause.
         // Instead, we transfer the instance to and from the thread main loop as needed
         loop {
-            let mut instance = rx_instance.recv()?;
-            let result = instance.run(&rx_control, tx_update.clone());
+            let mut instance = rx_instance.blocking_recv()
+                .ok_or_else(|| anyhow::anyhow!("Channel closed"))?;
+
+            tx_update.blocking_send(UpdateMessage::Running).map_err(|_| anyhow::anyhow!("Channel closed"))?;
+            let result = instance.run(&mut rx_control, tx_update.clone());
 
             match result {
                 Ok(_) => {
-                    tx_instance
-                        .send(Some(instance))
+                    tx_update.blocking_send(UpdateMessage::Paused(instance))
                         .map_err(|_| anyhow::anyhow!("Channel closed"))?;
                 }
                 Err(e) => {
-                    eprintln!("Instance returned error: {:?}", e);
-                    tx_instance
-                        .send(None)
+                    tx_update
+                        .blocking_send(UpdateMessage::Error(anyhow::anyhow!("Run error: {:?}", e), instance))
                         .map_err(|_| anyhow::anyhow!("Channel closed"))?;
                     return Err(e);
                 }
             }
         }
     }
+
+    fn exit(&mut self) -> Result<(), anyhow::Error> {
+        self.join
+            .take()
+            .expect("invalid instance state")
+            .join()
+            .unwrap()?;
+        Ok(())
+    }
+
 }
 
-impl ThreadedInstance for ThreadAdapter {
-    fn start(&mut self) -> Result<(), anyhow::Error> {
+
+impl ThreadAdapter {
+    pub fn start(&mut self) -> Result<(), anyhow::Error> {
         match self.instance.take() {
             Some(instance) => self
                 .tx_instance
-                .send(instance)
+                .try_send(instance)
                 .map_err(|_| anyhow::anyhow!("Channel closed")),
             None => anyhow::bail!("invalid instance state"),
         }
     }
-    fn pause(&mut self) -> Result<(), anyhow::Error> {
-        self.tx_control.send(ControlMessage::Pause)?;
-        self.instance = self.rx_instance_return.recv()?;
-        return match self.instance {
-            Some(_) => Ok(()),
-            None => {
-                self.join
-                    .take()
-                    .expect("invalid instance state")
-                    .join()
-                    .unwrap()?;
-                Err(anyhow::anyhow!("Instance paniced"))
-            }
-        };
-    }
+
     #[cfg(feature = "ui")]
-    fn paused_ui(&mut self, core: &dyn EmulationCore, ui: &mut egui::Ui) {
+    pub fn paused_ui(&mut self, core: &dyn EmulationCore, ui: &mut egui::Ui) {
         match self.instance {
             Some(ref mut instance) => core.paused_ui(instance.as_mut(), ui),
             None => panic!("Instance running or paniced"),
@@ -215,7 +236,7 @@ impl ThreadedInstance for ThreadAdapter {
     fn ui(&self, core: &dyn EmulationCore, ui: &mut egui::Ui) {
         assert!(self.instance.is_none());
         // Sync with instance thread
-        if self.tx_control.send(ControlMessage::UiSync).is_ok() {
+        if self.tx_control.blocking_send(ControlMessage::UiSync).is_ok() {
             loop {
                 match self.rx_update.recv() {
                     Ok(UpdateMessage::UiSynced) => break,
@@ -227,11 +248,22 @@ impl ThreadedInstance for ThreadAdapter {
         core.ui(ui);
     }
 
-    fn status(&self) -> Status {
+    #[cfg(feature = "dx")]
+    pub fn ui(&self, core: &dyn EmulationCore) -> Element {
+        core.ui(self.instance.as_deref())
+    }
+
+    pub fn status(&self) -> Status {
         match (&self.instance, &self.join) {
             (Some(_), _) => Status::Paused,
             (None, Some(join)) if !join.is_finished() => Status::Running,
             _ => Status::Error,
         }
+    }
+
+    pub async fn pause(&mut self) -> Result<(), anyhow::Error> {
+        self.tx_control.send(ControlMessage::Pause)
+            .await
+            .map_err(|_| anyhow::anyhow!("Channel closed"))
     }
 }

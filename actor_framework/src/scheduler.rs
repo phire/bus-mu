@@ -1,6 +1,4 @@
 
-use std::{usize, sync::mpsc::{self, TryRecvError}};
-
 use common::{ControlMessage, UpdateMessage};
 
 use crate::{object_map::{ObjectStore, ObjectStoreView}, Time, MakeNamed, Actor, MessagePacket, OutboxSend, Handler, Outbox, EnumMap};
@@ -262,15 +260,16 @@ impl<ActorNames> Scheduler<ActorNames> where
     #[inline(never)]
     pub fn run(
         &mut self,
-        control_rx: &mpsc::Receiver<ControlMessage>,
-        updates_tx: mpsc::SyncSender<UpdateMessage>,
+        control_rx: &mut tokio::sync::mpsc::Receiver<ControlMessage>,
+        updates_tx: tokio::sync::mpsc::Sender<UpdateMessage>,
     ) -> Result<(), anyhow::Error> {
         loop {
             match control_rx.try_recv() {
-                Err(TryRecvError::Empty) => {},
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {},
                 Ok(ControlMessage::Pause) => { return Ok(()); },
                 Ok(ControlMessage::UiSync) => {
-                    updates_tx.send(UpdateMessage::UiSynced)?;
+                    updates_tx.blocking_send(UpdateMessage::UiSynced)
+                        .map_err(|_| anyhow::anyhow!("Channel closed"))?;
                 },
                 Err(err) => { return Err(err.into()); },
             }

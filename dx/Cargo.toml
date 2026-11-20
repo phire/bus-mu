@@ -13,3 +13,4 @@ desktop = ["dioxus/desktop"]
 dioxus = { workspace = true }
 anyhow = { workspace = true }
 common = { path = "../common" }
+tokio = { workspace = true }

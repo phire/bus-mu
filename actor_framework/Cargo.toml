@@ -17,3 +17,4 @@ ui = []
 named-derive = { version = "0.1.0", path = "named-derive" }
 anyhow = { workspace = true }
 common = { path = "../common" }
+tokio = { workspace = true }

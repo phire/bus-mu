@@ -11,8 +11,6 @@ mod scheduler;
 mod time;
 mod time_queue;
 
-use std::sync::mpsc;
-
 pub use actor_box::{ActorBox, ActorBoxBase, AsBase};
 pub use addr::Addr;
 pub use channel::Channel;
@@ -113,8 +111,8 @@ where
 {
     fn run(
         &mut self,
-        control_rx: &mpsc::Receiver<ControlMessage>,
-        update: mpsc::SyncSender<UpdateMessage>,
+        control_rx: &mut tokio::sync::mpsc::Receiver<ControlMessage>,
+        update: tokio::sync::mpsc::Sender<UpdateMessage>,
     ) -> Result<(), anyhow::Error> {
         self.scheduler.run(control_rx, update)
     }
